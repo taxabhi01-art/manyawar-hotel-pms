@@ -272,3 +272,25 @@ Supabase → SQL Editor → `supabase-schema-v7.sql` Run karo.
 **5. Reports mein round (pie) charts** — "Bookings by source" aur "Bookings by status" — dono donut-chart ke roop mein, kaunse channel se zyada booking aa rahi hai turant dikh jayega.
 
 **6. Night Audit ab sirf Owner ko dikhega** — pehle sab staff ko dikhta tha, ab sirf owner login ko (Finance/Reports/Settings ki tarah).
+
+## UPDATE 9: Tax-inclusive GST, mandatory booking ID, Inventory (naya tab)
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v8.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye/badle features:
+
+**1. GST ab tax-inclusive hai** — Pehle GST **add** hoti thi total ke upar (jo galat tha, kyunki room rate mein tax already included hai). Ab jo bhi amount guest pay karta hai (booking total) **wahi bill pe final total dikhega** — GST sirf ek **breakdown** ke roop mein alag se dikhegi (kitna base price tha, kitna usme GST tha), lekin total badlega nahi. Ye Tax Invoice PDF aur WhatsApp bill dono mein sahi kar diya.
+
+**2. Booking ID ab mandatory hai** — New booking banate waqt "Booking ID / reference" field bharna **zaroori** hai ab, khali nahi chhod sakte.
+
+**3. Inventory (naya tab, sabko dikhega)** — Minibar/room-service jaisi cheezein manage karne ke liye:
+   - **Item catalog banao**: naam, price per unit, kitna stock hai
+   - **"Log item used"** — jab bhi koi item guest ko diya jaaye, yahan se select karo (kaunsa guest/room, kaunsa item, kitni quantity) — **automatically**:
+     - Us item ka **stock kam ho jata hai**
+     - Us guest ke **bill mein amount add ho jata hai** (Billing tab mein dikhega, aur invoice/WhatsApp bill mein bhi)
+   - "Undo" button se galti se add ho gayi entry wapas reverse kar sakte ho (stock aur bill dono wapas ho jayenge)
+
+Sab kuch automatic hai — ek baar item log karne ke baad, alag se kahin manually total update karne ki zaroorat nahi.

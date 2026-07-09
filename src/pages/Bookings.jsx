@@ -203,6 +203,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
                   Deposit {currency(b.deposit)} ({b.deposit_status || "held"})
                 </span>
               )}
+              {b.items_total > 0 && (
+                <span style={{ fontSize: 11.5, color: "var(--brass)" }}>+{currency(b.items_total)} items</span>
+              )}
               {b.early_checkin && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--brass)", borderRadius: 999, padding: "2px 9px" }}>
                   ⚡ Early check-in {b.early_checkin_fee > 0 ? `(+${currency(b.early_checkin_fee)})` : ""}
@@ -374,6 +377,7 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
   const previewRate = selectedRoom ? computeRoomRate(selectedRoom, occupancy) : 0;
 
   const submit = () => {
+    if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
     if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
     if (!roomId) return alert("No room is available for these dates. Try a different date range.");
     if (checkIn < todayISO()) {
@@ -512,8 +516,8 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
         </Field>
       </div>
       <div style={{ marginTop: 14 }}>
-        <Field label="Booking ID / reference (optional — shows on bill)">
-          <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} placeholder="e.g. your own ledger number, OTA ref" />
+        <Field label="Booking ID / reference (required — shows on bill) *">
+          <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} placeholder="e.g. your own ledger number, OTA ref" required />
         </Field>
       </div>
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>

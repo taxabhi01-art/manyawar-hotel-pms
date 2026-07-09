@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, PAYMENT_MODES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
 import { addPayment, updateBooking, getSettings } from "../lib/api.js";
 
-export default function Billing({ bookings, guests, rooms, reload }) {
+export default function Billing({ bookings, guests, rooms, inventoryUsage, reload }) {
   const [payModal, setPayModal] = useState(null);
   const [discountModal, setDiscountModal] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -67,6 +67,7 @@ export default function Billing({ bookings, guests, rooms, reload }) {
           const r = rooms.find((x) => x.id === b.room_id);
           const balance = b.total - b.paid_amount;
           const depositStatus = b.deposit_status || (b.deposit_refunded ? "refunded" : "held");
+          const items = inventoryUsage.filter((u) => u.booking_id === b.id);
           return (
             <div className="card" key={b.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -83,6 +84,7 @@ export default function Billing({ bookings, guests, rooms, reload }) {
                       {currency(b.subtotal ?? b.total)} − {currency(b.discount)} off
                     </div>
                   )}
+                  {b.items_total > 0 && <div style={{ fontSize: 11, color: "var(--brass)" }}>+{currency(b.items_total)} items</div>}
                 </div>
                 <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(b.paid_amount)}</span>
                 {b.deposit > 0 && (
@@ -105,7 +107,7 @@ export default function Billing({ bookings, guests, rooms, reload }) {
                   {g?.phone && (
                     <a
                       className="btn btn-ghost"
-                      href={whatsappLink(g.phone, buildBillMessage(b, g, r, settings || {}))}
+                      href={whatsappLink(g.phone, buildBillMessage(b, g, r, settings || {}, items))}
                       target="_blank"
                       rel="noreferrer"
                       style={{ textDecoration: "none" }}
@@ -113,7 +115,7 @@ export default function Billing({ bookings, guests, rooms, reload }) {
                       Send bill via WhatsApp
                     </a>
                   )}
-                  <Button variant="ghost" onClick={() => downloadTaxInvoice(b, g, r, settings || {})}>
+                  <Button variant="ghost" onClick={() => downloadTaxInvoice(b, g, r, settings || {}, items)}>
                     Tax Invoice PDF
                   </Button>
                   <Button variant="ghost" onClick={() => setDiscountModal(b)}>
@@ -122,6 +124,15 @@ export default function Billing({ bookings, guests, rooms, reload }) {
                   {balance > 0 && <Button onClick={() => setPayModal(b)}>Record payment</Button>}
                 </div>
               </div>
+              {items.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {items.map((it) => (
+                    <span key={it.id} style={{ fontSize: 11.5, color: "var(--brass)", fontFamily: "var(--font-mono)" }}>
+                      {it.item_name} ×{it.quantity} = {currency(it.amount)}
+                    </span>
+                  ))}
+                </div>
+              )}
               {(b.payments || []).length > 0 && (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {b.payments.map((p) => (
@@ -145,11 +156,12 @@ export default function Billing({ bookings, guests, rooms, reload }) {
   );
 }
 
-function buildBillMessage(booking, guest, room, settings) {
+function buildBillMessage(booking, guest, room, settings, items) {
   const gstPercent = Number(settings.gst_percent || 0);
-  const gstAmount = Math.round((booking.total * gstPercent) / 100);
-  const grandTotal = booking.total + gstAmount;
-  const balance = Math.max(0, grandTotal - booking.paid_amount);
+  // Room rate is tax-inclusive — total stays exactly what's charged; GST is
+  // just shown as a breakdown extracted from within that total.
+  const { base, gst } = splitInclusiveGst(booking.total, gstPercent);
+  const balance = Math.max(0, booking.total - booking.paid_amount);
   const lines = [
     `${settings.hotel_name || "MANYAWAR HOTEL"} — Bill`,
     "",
@@ -162,8 +174,10 @@ function buildBillMessage(booking, guest, room, settings) {
     booking.discount > 0 ? `Discount: - ${currency(booking.discount)}` : null,
     booking.early_checkin_fee > 0 ? `Early check-in fee: ${currency(booking.early_checkin_fee)}` : null,
     booking.late_checkout_fee > 0 ? `Late checkout fee: ${currency(booking.late_checkout_fee)}` : null,
-    gstPercent > 0 ? `GST (${gstPercent}%): ${currency(gstAmount)}` : null,
-    `Total: ${currency(grandTotal)}`,
+    ...(items && items.length > 0 ? ["", "Items/Services:", ...items.map((it) => `  ${it.item_name} ×${it.quantity} = ${currency(it.amount)}`)] : []),
+    "",
+    `Total (amount payable): ${currency(booking.total)}`,
+    gstPercent > 0 ? `  (incl. GST ${gstPercent}%: ${currency(gst)}, base: ${currency(base)})` : null,
     `Paid: ${currency(booking.paid_amount)}`,
     `Balance: ${currency(balance)}`,
     "",
@@ -244,11 +258,14 @@ function pdfMoney(n) {
   return `Rs. ${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
-function downloadTaxInvoice(booking, guest, room, settings) {
+function downloadTaxInvoice(booking, guest, room, settings, items) {
   const doc = new jsPDF();
   const gstPercent = Number(settings.gst_percent || 0);
-  const gstAmount = Math.round((booking.total * gstPercent) / 100);
-  const grandTotal = booking.total + gstAmount;
+  // Room rate is tax-inclusive — the grand total is exactly booking.total
+  // (what the guest actually pays). GST is shown as a breakdown pulled out
+  // of that total, never added on top of it.
+  const { base, gst } = splitInclusiveGst(booking.total, gstPercent);
+  const grandTotal = booking.total;
   const balance = grandTotal - booking.paid_amount;
 
   const NAVY = [22, 35, 58];
@@ -302,7 +319,7 @@ function downloadTaxInvoice(booking, guest, room, settings) {
       ...(booking.discount > 0 ? [["Discount" + (booking.discount_reason ? ` (${booking.discount_reason})` : ""), `- ${pdfMoney(booking.discount)}`]] : []),
       ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", pdfMoney(booking.early_checkin_fee)]] : []),
       ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", pdfMoney(booking.late_checkout_fee)]] : []),
-      ...(gstPercent > 0 ? [[`GST (${gstPercent}%)`, pdfMoney(gstAmount)]] : []),
+      ...((items || []).map((it) => [`${it.item_name} × ${it.quantity}`, pdfMoney(it.amount)])),
     ],
     theme: "plain",
     styles: { fontSize: 10, textColor: NAVY, cellPadding: { top: 4, bottom: 4, left: 4, right: 4 } },
@@ -323,7 +340,15 @@ function downloadTaxInvoice(booking, guest, room, settings) {
   doc.setTextColor(...NAVY);
   doc.text("Grand total", 120, y);
   doc.text(pdfMoney(grandTotal), 196, y, { align: "right" });
-  y += 7;
+  y += 6;
+
+  if (gstPercent > 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`(incl. GST ${gstPercent}%: ${pdfMoney(gst)} · taxable value: ${pdfMoney(base)})`, 120, y);
+    y += 7;
+  }
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9.5);

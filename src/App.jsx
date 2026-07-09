@@ -12,6 +12,7 @@ import Settings from "./pages/Settings.jsx";
 import Finance from "./pages/Finance.jsx";
 import CalendarPage from "./pages/Calendar.jsx";
 import NightAudit from "./pages/NightAudit.jsx";
+import Inventory from "./pages/Inventory.jsx";
 import {
   listRooms,
   listGuests,
@@ -22,6 +23,8 @@ import {
   listCoGuests,
   listExpenses,
   listNightAudits,
+  listInventoryItems,
+  listInventoryUsage,
   getMyProfile,
   updateTask,
   updateBooking,
@@ -36,6 +39,7 @@ const BASE_NAV = [
   { id: "bookings", label: "Bookings" },
   { id: "guests", label: "Guests" },
   { id: "billing", label: "Billing" },
+  { id: "inventory", label: "Inventory" },
   { id: "staff", label: "Staff" },
 ];
 const OWNER_NAV = [
@@ -49,7 +53,7 @@ export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
   const [role, setRole] = useState(null); // 'owner' | 'staff'
   const [tab, setTab] = useState("dashboard");
-  const [data, setData] = useState({ rooms: [], guests: [], bookings: [], staff: [], tasks: [], attendance: [], coGuests: [], expenses: [], nightAudits: [] });
+  const [data, setData] = useState({ rooms: [], guests: [], bookings: [], staff: [], tasks: [], attendance: [], coGuests: [], expenses: [], nightAudits: [], inventoryItems: [], inventoryUsage: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notifiedOnce, setNotifiedOnce] = useState(false);
@@ -71,7 +75,7 @@ export default function App() {
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [rooms, guests, bookings, staff, tasks, attendance, coGuests, expenses, nightAudits] = await Promise.all([
+    const [rooms, guests, bookings, staff, tasks, attendance, coGuests, expenses, nightAudits, inventoryItems, inventoryUsage] = await Promise.all([
       listRooms(),
       listGuests(),
       listBookings(),
@@ -81,6 +85,8 @@ export default function App() {
       listCoGuests(),
       listExpenses(),
       listNightAudits(),
+      listInventoryItems(),
+      listInventoryUsage(),
     ]);
     // Expenses are owner-only at the database level, so a staff login will get
     // an error here — that's expected, not a bug; just show an empty list for them.
@@ -96,6 +102,8 @@ export default function App() {
       coGuests: coGuests.data || [],
       expenses: expenses.data || [],
       nightAudits: nightAudits.data || [],
+      inventoryItems: inventoryItems.data || [],
+      inventoryUsage: inventoryUsage.data || [],
     });
     setLoading(false);
   }, []);
@@ -283,7 +291,19 @@ export default function App() {
               />
             )}
             {tab === "guests" && <Guests guests={data.guests} bookings={data.bookings} reload={reload} />}
-            {tab === "billing" && <Billing bookings={data.bookings} guests={data.guests} rooms={data.rooms} reload={reload} />}
+            {tab === "billing" && (
+              <Billing bookings={data.bookings} guests={data.guests} rooms={data.rooms} inventoryUsage={data.inventoryUsage} reload={reload} />
+            )}
+            {tab === "inventory" && (
+              <Inventory
+                items={data.inventoryItems}
+                usage={data.inventoryUsage}
+                bookings={data.bookings}
+                guests={data.guests}
+                rooms={data.rooms}
+                reload={reload}
+              />
+            )}
             {tab === "staff" && (
               <Staff staff={data.staff} rooms={data.rooms} tasks={data.tasks} attendance={data.attendance} reload={reload} />
             )}

@@ -63,8 +63,12 @@ hosting (Vercel), real staff logins. Ye ab **production mein live hai** aur roz 
   liye). Task assign karte hi WhatsApp automatically khulta hai — popup-blocker-safe (tab pehle khulta
   hai, phir database save hota hai, taaki browser block na kare)
 - **Guests** — directory, VIP tag, repeat-guest badge, search, ID-proof view button
-- **Billing** — payments (mode: Cash/UPI/Bank/Card/Other), discount, **PDF invoice generation**
-  (GST ke saath, modern navy/brass design)
+- **Billing** — payments (mode: Cash/UPI/Bank/Card/Other), discount, **PDF tax invoice** (GST
+  shown as tax-inclusive breakdown — total never inflates, matches what guest actually paid),
+  **Send bill via WhatsApp**
+- **Inventory** (sab dekh sakte hain) — item catalog (name/price/stock), "Log item used" against
+  any active booking — auto-deducts stock AND auto-adds the charge to that guest's bill total
+  (`bookings.items_total`, folded into `computeBookingTotal`)
 - **Staff** — CRUD, housekeeping tasks, attendance marking, task-notification badge (staff.email se
   login match hota hai)
 - **Reports** (sirf `role='owner'` ko dikhta hai) — 15-din/mahine revenue comparison (custom months back),
@@ -108,6 +112,8 @@ Migrations is order mein chalayi gayi hain (sab already run ho chuki hain live p
    checkout flags + fees, `bookings.booking_ref` (manual booking ID shown on invoices)
 7. `supabase-schema-v7.sql` — salary expense fields (`expenses.staff_id`, `expenses.salary_period`),
    `night_audits` table, `bookings.cancel_reason`
+8. `supabase-schema-v8.sql` — `inventory_items` (catalog), `inventory_usage` (auto stock-deduct +
+   auto bill-add when logged against a booking), `bookings.items_total`
 
 Agar future mein koi naya SQL change ho, isi pattern mein `supabase-schema-v5.sql` banega —
 additive rehta hai (purana kabhi nahi todta), `create table if not exists` /
@@ -148,6 +154,7 @@ manyawar-pms/
         ├── Billing.jsx          ← payments, tax invoice + proforma PDFs, print, deposit adjust
         ├── Staff.jsx            ← tasks + attendance + WhatsApp task assign
         ├── Finance.jsx          ← owner-only: income, expenses (with salary tracking), cash flow
+        ├── Inventory.jsx        ← item catalog + usage log (auto stock + auto bill)
         ├── NightAudit.jsx       ← end-of-day summary, no-show marking, audit history
         ├── Reports.jsx          ← owner-only revenue + Excel export + charts
         └── Settings.jsx         ← owner-only GST/hotel settings

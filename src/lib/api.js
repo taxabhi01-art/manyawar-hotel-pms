@@ -111,6 +111,29 @@ export async function deleteExpense(id) {
 }
 
 // ---------- NIGHT AUDIT ----------
+// ---------- INVENTORY ----------
+export async function listInventoryItems() {
+  return supabase.from("inventory_items").select("*").order("name");
+}
+export async function addInventoryItem(item) {
+  return supabase.from("inventory_items").insert(item).select().single();
+}
+export async function updateInventoryItem(id, patch) {
+  return supabase.from("inventory_items").update(patch).eq("id", id);
+}
+export async function deleteInventoryItem(id) {
+  return supabase.from("inventory_items").delete().eq("id", id);
+}
+export async function listInventoryUsage() {
+  return supabase.from("inventory_usage").select("*").order("used_at", { ascending: false });
+}
+export async function addInventoryUsage(usage) {
+  return supabase.from("inventory_usage").insert(usage).select().single();
+}
+export async function deleteInventoryUsage(id) {
+  return supabase.from("inventory_usage").delete().eq("id", id);
+}
+
 export async function listNightAudits() {
   return supabase.from("night_audits").select("*").order("audit_date", { ascending: false });
 }
