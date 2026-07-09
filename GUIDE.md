@@ -151,3 +151,22 @@ Supabase → SQL Editor → `supabase-schema-v4.sql` ka poora content paste kark
 
 ### Ek chhoti si sacchai
 Ye "scan" asal mein ek **photo capture** hai (phone camera se), na ki automatic OCR/barcode reading jo ID se naam-number khud nikaal le. Wo feature banane ke liye paid OCR service chahiye hogi — abhi ke liye photo hi kaafi hai zyadatar hotels ke liye (jaisa guest register mein photocopy rakhte hain, waisa hi digital version).
+
+## UPDATE 4: Phone pe app jaisa install karo (PWA)
+
+Is update ke baad app ko phone ke **home screen pe icon** ki tarah install kar sakte ho — khulega to browser ka address bar tak nahi dikhega, bilkul native app jaisa lagega.
+
+**Koi naya SQL nahi lagta** — sirf naye files GitHub pe upload karo (poora zip content), jaisa pehle kiya.
+
+### Android (Chrome) pe install karna
+1. Site kholo browser mein
+2. Address bar ke paas ya ⋮ (three-dot) menu mein **"Install app"** ya **"Add to Home screen"** dikhega
+3. Tap karo — icon home screen pe aa jayega
+
+### iPhone (Safari) pe install karna
+1. Site kholo Safari mein (Chrome se nahi hoga, iPhone pe sirf Safari se kaam karta hai)
+2. Neeche **Share button** (□ upward arrow) dabao
+3. **"Add to Home Screen"** choose karo
+4. Icon home screen pe aa jayega
+
+Dono jagah, icon pe tap karne se app **poori screen** mein khulega, browser ka koi UI nahi dikhega — bilkul Play Store se install kiye app jaisa feel hoga, bas ye web-based hai (isliye Play Store pe listing ki zaroorat nahi).
