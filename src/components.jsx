@@ -179,6 +179,33 @@ export function whatsappLink(phone, message) {
   return `https://wa.me/${withCountryCode}?text=${encodeURIComponent(message)}`;
 }
 
+// ---------- Standard check-in/check-out policy ----------
+export const CHECKIN_HOUR = 12; // 12:00 PM standard check-in
+export const CHECKOUT_HOUR = 11; // 11:00 AM standard check-out
+export const EARLY_CHECKIN_GRACE_HOURS = 2; // fee applies if arriving 2+ hrs early
+export const LATE_CHECKOUT_GRACE_HOURS = 1; // fee applies if leaving 1+ hrs late
+
+function hourNow() {
+  const now = new Date();
+  return now.getHours() + now.getMinutes() / 60;
+}
+export function isEarlyCheckinNow() {
+  return hourNow() < CHECKIN_HOUR - EARLY_CHECKIN_GRACE_HOURS;
+}
+export function isLateCheckoutNow() {
+  return hourNow() >= CHECKOUT_HOUR + LATE_CHECKOUT_GRACE_HOURS;
+}
+
+// Recomputes a booking's total from its parts — call this any time subtotal,
+// discount, or either fee changes, so nothing gets silently overwritten.
+export function computeBookingTotal(b) {
+  const subtotal = b.subtotal ?? b.total ?? 0;
+  const discount = b.discount || 0;
+  const early = b.early_checkin_fee || 0;
+  const late = b.late_checkout_fee || 0;
+  return Math.max(0, subtotal - discount + early + late);
+}
+
 export const STATUS = {
   available: { label: "Available", color: "#5f8863" },
   occupied: { label: "Occupied", color: "#a6452f" },

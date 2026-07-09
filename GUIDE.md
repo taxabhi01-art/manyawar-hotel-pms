@@ -202,3 +202,28 @@ Supabase → SQL Editor → `supabase-schema-v5.sql` ka content paste karke Run 
 ### Extra jo maine add kiya (na maanga tha, lekin useful laga)
 - Expense category-wise breakdown (is mahine kahan sabse zyada kharch hua)
 - Booking source tracking already tha, ab reports mein room-popularity se combine hota hai decision lene ke liye
+
+## UPDATE 6: Dashboard se direct check-in/out, early/late fee, date filter, booking ID
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v6.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo (poora zip)
+
+### Naye features:
+
+**1. Dashboard se direct check-in/check-out** — "Arriving today" card pe click karo, ek list khulegi jisme har guest ke saamne seedha **"Check in"** button hai. Same "Departing today" pe **"Check out"** button.
+
+**2. Standard timing: Check-in 12:00 PM, Check-out 11:00 AM**
+- Agar koi guest **2 ghante ya usse pehle** (10:00 AM se pehle) check-in kare, to "Early check-in" ka option apne aap dikhega — fee daal sakte ho (ya 0 rakh ke waive kar sakte ho), wo bill mein add ho jayega
+- Agar koi guest **1 ghanta ya usse zyada** late (12:00 PM ke baad) checkout kare, to "Late checkout" fee ka option dikhega, wahi bill mein add hoga
+- Dono fees invoice/proforma pe alag line mein dikhengi
+
+**3. Highlighted tags** — Bookings list mein agar early check-in ya late checkout hua hai, to guest ke naam ke paas ek **highlighted badge** dikhega (⚡ Early check-in / ⏰ Late checkout), fee amount ke saath.
+
+**4. Bookings page filter** — Ab status filter (all/reserved/checked-in/checked-out) ke saath ek **date range filter** bhi hai — "From" aur "To" date daal ke sirf us period ki bookings dekh sakte ho (check-in date ke hisaab se).
+
+**5. Manual Booking ID** — New booking banate waqt ek "Booking ID / Reference" field hai (optional) — apna khud ka number ya OTA ka reference daal sakte ho. Ye number Bookings list aur **Tax Invoice PDF** dono pe dikhega.
+
+### Zaroori baat
+Early/late fee detection aapke device/computer ki **local time** se hoti hai — isliye device ka time-zone aur ghadi sahi honi chahiye (India Standard Time). Fee amount har baar manually daalna hota hai — system khud koi fixed amount नहीं lagata, aap decide karte ho har case mein.

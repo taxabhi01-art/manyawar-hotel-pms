@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, PAYMENT_MODES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, PAYMENT_MODES } from "../components.jsx";
 import { addPayment, updateBooking, getSettings } from "../lib/api.js";
 
 export default function Billing({ bookings, guests, rooms, reload }) {
@@ -25,7 +25,8 @@ export default function Billing({ bookings, guests, rooms, reload }) {
   const applyDiscount = async (booking, discount, reason) => {
     const subtotal = booking.subtotal ?? booking.total;
     const clamped = Math.max(0, Math.min(subtotal, discount));
-    await updateBooking(booking.id, { discount: clamped, discount_reason: reason, total: subtotal - clamped });
+    const total = computeBookingTotal({ ...booking, subtotal, discount: clamped });
+    await updateBooking(booking.id, { discount: clamped, discount_reason: reason, total });
     setDiscountModal(null);
     reload();
   };
@@ -278,6 +279,8 @@ function buildProformaHtml(booking, guest, room, settings, template) {
   const rows = [
     ["Room charges", currency(booking.subtotal ?? booking.total)],
     ...(booking.discount > 0 ? [["Discount", `- ${currency(booking.discount)}`]] : []),
+    ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", currency(booking.early_checkin_fee)]] : []),
+    ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", currency(booking.late_checkout_fee)]] : []),
     ["Total", currency(booking.total)],
     ["Paid", currency(booking.paid_amount)],
     ["Balance", currency(Math.max(0, booking.total - booking.paid_amount))],
@@ -333,6 +336,8 @@ function generateProformaPdfClassic(booking, guest, room, settings) {
     body: [
       ["Room charges", currency(booking.subtotal ?? booking.total).replace("₹", "Rs. ")],
       ...(booking.discount > 0 ? [["Discount", `- Rs. ${booking.discount}`]] : []),
+      ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", `Rs. ${booking.early_checkin_fee}`]] : []),
+      ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", `Rs. ${booking.late_checkout_fee}`]] : []),
       ["Total", `Rs. ${booking.total}`],
       ["Paid", `Rs. ${booking.paid_amount}`],
       ["Balance", `Rs. ${Math.max(0, booking.total - booking.paid_amount)}`],
@@ -362,6 +367,8 @@ function generateProformaPdfSimple(booking, guest, room, settings) {
     body: [
       ["Room charges", `Rs. ${booking.subtotal ?? booking.total}`],
       ...(booking.discount > 0 ? [["Discount", `- Rs. ${booking.discount}`]] : []),
+      ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", `Rs. ${booking.early_checkin_fee}`]] : []),
+      ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", `Rs. ${booking.late_checkout_fee}`]] : []),
       ["Total", `Rs. ${booking.total}`],
       ["Paid", `Rs. ${booking.paid_amount}`],
       ["Balance", `Rs. ${Math.max(0, booking.total - booking.paid_amount)}`],
@@ -414,7 +421,7 @@ function downloadTaxInvoice(booking, guest, room, settings) {
   doc.setFontSize(9);
   doc.setTextColor(220, 220, 225);
   doc.text(`Date: ${fmtDate(todayISO())}`, 196, 24, { align: "right" });
-  doc.text(`Booking ref: ${booking.id.slice(0, 8).toUpperCase()}`, 196, 30, { align: "right" });
+  doc.text(`Booking ref: ${booking.booking_ref || booking.id.slice(0, 8).toUpperCase()}`, 196, 30, { align: "right" });
 
   doc.setFillColor(...LIGHT);
   doc.roundedRect(14, 46, 182, 26, 2, 2, "F");
@@ -436,6 +443,8 @@ function downloadTaxInvoice(booking, guest, room, settings) {
     body: [
       ["Room charges", pdfMoney(booking.subtotal ?? booking.total)],
       ...(booking.discount > 0 ? [["Discount" + (booking.discount_reason ? ` (${booking.discount_reason})` : ""), `- ${pdfMoney(booking.discount)}`]] : []),
+      ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", pdfMoney(booking.early_checkin_fee)]] : []),
+      ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", pdfMoney(booking.late_checkout_fee)]] : []),
       ...(gstPercent > 0 ? [[`GST (${gstPercent}%)`, pdfMoney(gstAmount)]] : []),
     ],
     theme: "plain",

@@ -1,8 +1,10 @@
 import React, { useState } from "react";
 import { SectionTitle, Pill, Button, Modal, currency, fmtDate, todayISO, STATUS } from "../components.jsx";
 
-export default function Dashboard({ rooms, bookings, guests, setTab }) {
+export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheckIn, onOpenCheckOut }) {
   const [reservedModalOpen, setReservedModalOpen] = useState(false);
+  const [arrivalsModalOpen, setArrivalsModalOpen] = useState(false);
+  const [departuresModalOpen, setDeparturesModalOpen] = useState(false);
   const today = todayISO();
   const occupied = rooms.filter((r) => r.status === "occupied").length;
   const occupancy = rooms.length ? Math.round((occupied / rooms.length) * 100) : 0;
@@ -23,8 +25,18 @@ export default function Dashboard({ rooms, bookings, guests, setTab }) {
 
   const stats = [
     { label: "Occupancy", value: `${occupancy}%`, sub: `${occupied} of ${rooms.length} rooms` },
-    { label: "Arriving today", value: checkinsToday.length, sub: "reserved guests" },
-    { label: "Departing today", value: checkoutsToday.length, sub: "checked-in guests" },
+    {
+      label: "Arriving today",
+      value: checkinsToday.length,
+      sub: checkinsToday.length > 0 ? "Click to check guests in" : "reserved guests",
+      onClick: checkinsToday.length > 0 ? () => setArrivalsModalOpen(true) : null,
+    },
+    {
+      label: "Departing today",
+      value: checkoutsToday.length,
+      sub: checkoutsToday.length > 0 ? "Click to check guests out" : "checked-in guests",
+      onClick: checkoutsToday.length > 0 ? () => setDeparturesModalOpen(true) : null,
+    },
     { label: "Revenue this month", value: currency(revenueThisMonth), sub: "amount collected" },
   ];
 
@@ -50,14 +62,49 @@ export default function Dashboard({ rooms, bookings, guests, setTab }) {
 
       <SectionTitle eyebrow="Front desk" title="Today at a glance" />
       <div className="stat-grid">
-        {stats.map((s) => (
-          <div className="stat-card" key={s.label}>
-            <div className="label">{s.label}</div>
-            <div className="value">{s.value}</div>
-            <div className="sub">{s.sub}</div>
-          </div>
-        ))}
+        {stats.map((s) =>
+          s.onClick ? (
+            <button key={s.label} onClick={s.onClick} className="stat-card" style={{ all: "unset", cursor: "pointer", display: "block" }}>
+              <div className="stat-card">
+                <div className="label">{s.label}</div>
+                <div className="value">{s.value}</div>
+                <div className="sub" style={{ color: "var(--brass)", fontWeight: 600 }}>{s.sub}</div>
+              </div>
+            </button>
+          ) : (
+            <div className="stat-card" key={s.label}>
+              <div className="label">{s.label}</div>
+              <div className="value">{s.value}</div>
+              <div className="sub">{s.sub}</div>
+            </div>
+          )
+        )}
       </div>
+
+      {arrivalsModalOpen && (
+        <ArrivalsModal
+          bookings={checkinsToday}
+          guests={guests}
+          rooms={rooms}
+          onClose={() => setArrivalsModalOpen(false)}
+          onCheckIn={(b) => {
+            setArrivalsModalOpen(false);
+            onOpenCheckIn(b);
+          }}
+        />
+      )}
+      {departuresModalOpen && (
+        <DeparturesModal
+          bookings={checkoutsToday}
+          guests={guests}
+          rooms={rooms}
+          onClose={() => setDeparturesModalOpen(false)}
+          onCheckOut={(b) => {
+            setDeparturesModalOpen(false);
+            onOpenCheckOut(b);
+          }}
+        />
+      )}
 
       <SectionTitle eyebrow="Room status" title="Right now" />
       <div className="stat-grid">
@@ -144,5 +191,66 @@ export default function Dashboard({ rooms, bookings, guests, setTab }) {
         </div>
       )}
     </div>
+  );
+}
+
+function ArrivalsModal({ bookings, guests, rooms, onClose, onCheckIn }) {
+  return (
+    <Modal title="Arriving today" onClose={onClose} width={460}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {bookings.map((b) => {
+          const g = guests.find((x) => x.id === b.guest_id);
+          const r = rooms.find((x) => x.id === b.room_id);
+          return (
+            <div key={b.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{g ? g.name : "Guest removed"}</div>
+                <div style={{ fontSize: 12, color: "var(--ink45)" }}>
+                  Room {r ? r.number : "—"} · {currency(b.total)}
+                </div>
+              </div>
+              <Button onClick={() => onCheckIn(b)}>Check in</Button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeparturesModal({ bookings, guests, rooms, onClose, onCheckOut }) {
+  return (
+    <Modal title="Departing today" onClose={onClose} width={460}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {bookings.map((b) => {
+          const g = guests.find((x) => x.id === b.guest_id);
+          const r = rooms.find((x) => x.id === b.room_id);
+          const balance = b.total - b.paid_amount;
+          return (
+            <div key={b.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{g ? g.name : "Guest removed"}</div>
+                <div style={{ fontSize: 12, color: balance > 0 ? "var(--rust)" : "var(--ink45)" }}>
+                  Room {r ? r.number : "—"} · {balance > 0 ? `Due ${currency(balance)}` : "Settled"}
+                </div>
+              </div>
+              <Button variant="dark" onClick={() => onCheckOut(b)}>
+                Check out
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </Modal>
   );
 }

@@ -50,6 +50,11 @@ hosting (Vercel), real staff logins. Ye ab **production mein live hai** aur roz 
   - Checkout ke baad auto-generate hoti hai ek "cleaning" task (Staff tab ki "Housekeeping queue" mein)
   - Past check-in date allowed hai (sirf warning dikhta hai, block nahi karta)
   - Booking creation date ("Booked on") dikhta hai
+  - Early check-in (2+ hrs before 12 PM) / late checkout (1+ hr after 11 AM) detect hota hai, optional
+    fee jo total mein add hoti hai aur highlighted badge se list mein dikhti hai
+  - Date-range filter (check-in date se) aur manual "Booking ID/reference" field jo invoice pe dikhta hai
+  - Check-in/check-out modals ab App.jsx level pe hain — Dashboard ke "Arriving/Departing today" cards
+    se seedha trigger ho sakte hain
 - **Guests** — directory, VIP tag, repeat-guest badge, search, ID-proof view button
 - **Billing** — payments (mode: Cash/UPI/Bank/Card/Other), discount, **PDF invoice generation**
   (GST ke saath, modern navy/brass design)
@@ -92,6 +97,8 @@ Migrations is order mein chalayi gayi hain (sab already run ho chuki hain live p
 5. `supabase-schema-v5.sql` — `is_owner()` helper function, `expenses` table (owner-only at DB level),
    `bookings.deposit_status` (held/adjusted/refunded), separate `id_proof_front_path` /
    `id_proof_back_path` on `guests` and `co_guests`
+6. `supabase-schema-v6.sql` — `bookings.checked_in_at`/`checked_out_at`, early check-in and late
+   checkout flags + fees, `bookings.booking_ref` (manual booking ID shown on invoices)
 
 Agar future mein koi naya SQL change ho, isi pattern mein `supabase-schema-v5.sql` banega —
 additive rehta hai (purana kabhi nahi todta), `create table if not exists` /

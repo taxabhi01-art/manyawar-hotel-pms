@@ -3,7 +3,7 @@ import { supabase } from "./supabaseClient";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Rooms from "./pages/Rooms.jsx";
-import Bookings from "./pages/Bookings.jsx";
+import Bookings, { CheckInModal, CheckOutModal } from "./pages/Bookings.jsx";
 import Guests from "./pages/Guests.jsx";
 import Billing from "./pages/Billing.jsx";
 import Staff from "./pages/Staff.jsx";
@@ -22,6 +22,9 @@ import {
   listExpenses,
   getMyProfile,
   updateTask,
+  updateBooking,
+  updateRoom,
+  addTask,
 } from "./lib/api.js";
 
 const BASE_NAV = [
@@ -130,6 +133,44 @@ export default function App() {
     reload();
   };
 
+  // Check-in / check-out are triggered from either the Bookings tab or the
+  // Dashboard's "Arriving/Departing today" cards — lifted here so both can
+  // open the same modal.
+  const [checkInModal, setCheckInModal] = useState(null);
+  const [checkOutModal, setCheckOutModal] = useState(null);
+
+  const finishCheckIn = async ({ early, earlyFee }) => {
+    const booking = checkInModal;
+    const newTotal = booking.total + (early ? earlyFee : 0);
+    await updateBooking(booking.id, {
+      status: "checked-in",
+      checked_in_at: new Date().toISOString(),
+      early_checkin: !!early,
+      early_checkin_fee: early ? earlyFee : 0,
+      total: newTotal,
+    });
+    await updateRoom(booking.room_id, { status: "occupied" });
+    setCheckInModal(null);
+    reload();
+  };
+
+  const finishCheckOut = async ({ late, lateFee }) => {
+    const booking = checkOutModal;
+    const newTotal = booking.total + (late ? lateFee : 0);
+    await updateBooking(booking.id, {
+      status: "checked-out",
+      checked_out_at: new Date().toISOString(),
+      late_checkout: !!late,
+      late_checkout_fee: late ? lateFee : 0,
+      total: newTotal,
+    });
+    await updateRoom(booking.room_id, { status: "cleaning" });
+    // Auto-queue a cleaning task — any Housekeeping staff can pick it up (see Staff tab)
+    await addTask({ staff_id: null, room_id: booking.room_id, task: "Clean room after checkout", done: false });
+    setCheckOutModal(null);
+    reload();
+  };
+
   if (session === undefined) {
     return <div className="login-shell" style={{ color: "#fff" }}>Loading…</div>;
   }
@@ -213,10 +254,29 @@ export default function App() {
           <p style={{ color: "var(--ink45)" }}>Loading…</p>
         ) : (
           <>
-            {tab === "dashboard" && <Dashboard rooms={data.rooms} bookings={data.bookings} guests={data.guests} setTab={setTab} />}
+            {tab === "dashboard" && (
+              <Dashboard
+                rooms={data.rooms}
+                bookings={data.bookings}
+                guests={data.guests}
+                setTab={setTab}
+                onOpenCheckIn={(b) => setCheckInModal(b)}
+                onOpenCheckOut={(b) => setCheckOutModal(b)}
+              />
+            )}
             {tab === "calendar" && <CalendarPage bookings={data.bookings} guests={data.guests} rooms={data.rooms} />}
             {tab === "rooms" && <Rooms rooms={data.rooms} bookings={data.bookings} reload={reload} />}
-            {tab === "bookings" && <Bookings rooms={data.rooms} guests={data.guests} bookings={data.bookings} coGuests={data.coGuests} reload={reload} />}
+            {tab === "bookings" && (
+              <Bookings
+                rooms={data.rooms}
+                guests={data.guests}
+                bookings={data.bookings}
+                coGuests={data.coGuests}
+                onOpenCheckIn={(b) => setCheckInModal(b)}
+                onOpenCheckOut={(b) => setCheckOutModal(b)}
+                reload={reload}
+              />
+            )}
             {tab === "guests" && <Guests guests={data.guests} bookings={data.bookings} reload={reload} />}
             {tab === "billing" && <Billing bookings={data.bookings} guests={data.guests} rooms={data.rooms} reload={reload} />}
             {tab === "staff" && (
@@ -230,6 +290,18 @@ export default function App() {
           </>
         )}
       </div>
+      {checkInModal && (
+        <CheckInModal
+          booking={checkInModal}
+          guest={data.guests.find((g) => g.id === checkInModal.guest_id)}
+          existingCoGuests={data.coGuests.filter((c) => c.booking_id === checkInModal.id)}
+          onClose={() => setCheckInModal(null)}
+          onConfirm={finishCheckIn}
+        />
+      )}
+      {checkOutModal && (
+        <CheckOutModal booking={checkOutModal} onClose={() => setCheckOutModal(null)} onConfirm={finishCheckOut} />
+      )}
     </div>
   );
 }

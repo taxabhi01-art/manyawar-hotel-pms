@@ -13,6 +13,9 @@ import {
   todayISO,
   isRoomAvailableForDates,
   computeRoomRate,
+  computeBookingTotal,
+  isEarlyCheckinNow,
+  isLateCheckoutNow,
   whatsappLink,
   BOOKING_SOURCES,
 } from "../components.jsx";
@@ -22,28 +25,27 @@ import {
   deleteBooking,
   addGuest,
   updateGuest,
-  updateRoom,
-  addTask,
   addCoGuest,
   updateCoGuest,
   uploadIdProof,
   getIdProofSignedUrl,
 } from "../lib/api.js";
 
-export default function Bookings({ rooms, guests, bookings, coGuests, reload }) {
+export default function Bookings({ rooms, guests, bookings, coGuests, onOpenCheckIn, onOpenCheckOut, reload }) {
   const [modal, setModal] = useState(null);
   const [editModal, setEditModal] = useState(null);
-  const [checkInModal, setCheckInModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
   const [confirmSendModal, setConfirmSendModal] = useState(null);
   const [filter, setFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState(false);
 
   const roomOf = (id) => rooms.find((r) => r.id === id);
   const guestOf = (id) => guests.find((g) => g.id === id);
   const bookableRooms = rooms.filter((r) => r.status !== "maintenance");
 
-  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, coGuestsCount }) => {
+  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, coGuestsCount, bookingRef }) => {
     setBusy(true);
     let guestId = guest.id;
     let fullGuest = guest;
@@ -73,6 +75,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
       deposit: deposit || 0,
       deposit_refunded: false,
       co_guests_count: coGuestsCount || 0,
+      booking_ref: bookingRef || null,
     });
     setBusy(false);
     setModal(null);
@@ -82,52 +85,27 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
     }
   };
 
-  const finishCheckIn = async (booking) => {
-    await updateBooking(booking.id, { status: "checked-in" });
-    await updateRoom(booking.room_id, { status: "occupied" });
-    setCheckInModal(null);
-    reload();
-  };
-
-  const doCheckOut = async (b) => {
-    const balance = b.total - b.paid_amount;
-    if (balance > 0) {
-      const proceed = confirm(
-        `⚠ Balance due: ${currency(balance)}\n\nThis guest still owes ${currency(balance)}. Please collect payment before they leave.\n\nContinue with check-out anyway?`
-      );
-      if (!proceed) return;
-    }
-    await updateBooking(b.id, { status: "checked-out" });
-    await updateRoom(b.room_id, { status: "cleaning" });
-    // Auto-queue a cleaning task — any Housekeeping staff can pick it up (see Staff tab)
-    await addTask({ staff_id: null, room_id: b.room_id, task: "Clean room after checkout", done: false });
-    reload();
-  };
   const cancelBooking = async (b) => {
     if (!confirm("Cancel this booking?")) return;
     await deleteBooking(b.id);
-    if (b.status === "checked-in") {
-      await updateRoom(b.room_id, { status: "available" });
-    }
     reload();
   };
   const saveDates = async (booking, { checkIn, checkOut }) => {
     const nights = nightsBetween(checkIn, checkOut);
     const subtotal = booking.rate * nights;
     const discount = Math.min(booking.discount || 0, subtotal);
-    await updateBooking(booking.id, {
-      check_in: checkIn,
-      check_out: checkOut,
-      nights,
-      subtotal,
-      discount,
-      total: subtotal - discount,
-    });
+    const total = computeBookingTotal({ ...booking, subtotal, discount });
+    await updateBooking(booking.id, { check_in: checkIn, check_out: checkOut, nights, subtotal, discount, total });
     setEditModal(null);
     reload();
   };
 
-  const visible = bookings.filter((b) => filter === "all" || b.status === filter);
+  const visible = bookings.filter((b) => {
+    if (filter !== "all" && b.status !== filter) return false;
+    if (dateFrom && b.check_in < dateFrom) return false;
+    if (dateTo && b.check_in > dateTo) return false;
+    return true;
+  });
 
   return (
     <div>
@@ -145,7 +123,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
           No rooms available to book — all rooms are under maintenance.
         </p>
       )}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         {["all", "reserved", "checked-in", "checked-out"].map((f) => (
           <button
             key={f}
@@ -167,6 +145,19 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
           </button>
         ))}
       </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <Field label="From (check-in date)">
+          <input className="input" type="date" style={{ width: 160 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </Field>
+        <Field label="To">
+          <input className="input" type="date" style={{ width: 160 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </Field>
+        {(dateFrom || dateTo) && (
+          <Button variant="ghost" onClick={() => { setDateFrom(""); setDateTo(""); }}>
+            Clear dates
+          </Button>
+        )}
+      </div>
 
       {visible.length === 0 ? (
         <EmptyState text="No bookings match this view." />
@@ -181,6 +172,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
                   {g ? g.name : "Guest removed"} {g?.vip && "⭐"}
                 </div>
                 <div className="sub">{g ? g.phone : ""}</div>
+                {b.booking_ref && (
+                  <div style={{ fontSize: 10.5, color: "var(--brass)", fontFamily: "var(--font-mono)" }}>Ref: {b.booking_ref}</div>
+                )}
                 {b.created_at && (
                   <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>Booked on {fmtDate(b.created_at.slice(0, 10))}</div>
                 )}
@@ -198,6 +192,16 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
                   Deposit {currency(b.deposit)} ({b.deposit_status || "held"})
                 </span>
               )}
+              {b.early_checkin && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--brass)", borderRadius: 999, padding: "2px 9px" }}>
+                  ⚡ Early check-in {b.early_checkin_fee > 0 ? `(+${currency(b.early_checkin_fee)})` : ""}
+                </span>
+              )}
+              {b.late_checkout && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--rust)", borderRadius: 999, padding: "2px 9px" }}>
+                  ⏰ Late checkout {b.late_checkout_fee > 0 ? `(+${currency(b.late_checkout_fee)})` : ""}
+                </span>
+              )}
               <Pill color={b.status === "reserved" ? "#c99a3c" : b.status === "checked-in" ? "#5f8863" : "#46536b"}>{b.status}</Pill>
               <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <Button variant="ghost" onClick={() => setDetailModal(b)}>
@@ -208,9 +212,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
                     Edit dates
                   </Button>
                 )}
-                {b.status === "reserved" && <Button onClick={() => setCheckInModal(b)}>Check in</Button>}
+                {b.status === "reserved" && <Button onClick={() => onOpenCheckIn(b)}>Check in</Button>}
                 {b.status === "checked-in" && (
-                  <Button variant="dark" onClick={() => doCheckOut(b)}>
+                  <Button variant="dark" onClick={() => onOpenCheckOut(b)}>
                     Check out
                   </Button>
                 )}
@@ -241,15 +245,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
           bookings={bookings}
           onClose={() => setEditModal(null)}
           onSave={(d) => saveDates(editModal, d)}
-        />
-      )}
-      {checkInModal && (
-        <CheckInModal
-          booking={checkInModal}
-          guest={guestOf(checkInModal.guest_id)}
-          existingCoGuests={coGuests.filter((c) => c.booking_id === checkInModal.id)}
-          onClose={() => setCheckInModal(null)}
-          onConfirm={() => finishCheckIn(checkInModal)}
         />
       )}
       {detailModal && (
@@ -303,6 +298,7 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
   const [source, setSource] = useState(BOOKING_SOURCES[0]);
   const [deposit, setDeposit] = useState(0);
   const [coGuestsCount, setCoGuestsCount] = useState(0);
+  const [bookingRef, setBookingRef] = useState("");
 
   // Only rooms with no overlapping booking for the CHOSEN dates show up here —
   // this is what stops a room from being double-booked for future dates.
@@ -340,7 +336,16 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
       if (!name.trim()) return alert("Guest name is required.");
       guest = { name: name.trim(), phone: phone.trim(), email: email.trim() };
     }
-    onCreate({ guest, roomId, checkIn, checkOut, source, deposit: Number(deposit) || 0, coGuestsCount: Number(coGuestsCount) || 0 });
+    onCreate({
+      guest,
+      roomId,
+      checkIn,
+      checkOut,
+      source,
+      deposit: Number(deposit) || 0,
+      coGuestsCount: Number(coGuestsCount) || 0,
+      bookingRef: bookingRef.trim(),
+    });
   };
 
   return (
@@ -452,6 +457,11 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
           <input className="input" type="number" value={deposit} onChange={(e) => setDeposit(e.target.value)} />
         </Field>
       </div>
+      <div style={{ marginTop: 14 }}>
+        <Field label="Booking ID / reference (optional — shows on bill)">
+          <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} placeholder="e.g. your own ledger number, OTA ref" />
+        </Field>
+      </div>
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Button variant="ghost" onClick={onClose}>
           Cancel
@@ -468,7 +478,8 @@ function EditDatesModal({ booking, bookings, onClose, onSave }) {
   const [checkIn, setCheckIn] = useState(booking.check_in);
   const [checkOut, setCheckOut] = useState(booking.check_out);
   const nights = nightsBetween(checkIn, checkOut);
-  const newTotal = Math.max(0, booking.rate * nights - (booking.discount || 0));
+  const newSubtotal = booking.rate * nights;
+  const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal });
   const available = isRoomAvailableForDates(booking.room_id, checkIn, checkOut, bookings, booking.id);
 
   return (
@@ -514,9 +525,10 @@ function EditDatesModal({ booking, bookings, onClose, onSave }) {
 
 // ---------------------------------------------------------------
 // CHECK-IN — capture ID proof photos for the main guest and any
-// co-guests right from the phone camera, then finalize check-in.
+// co-guests, flag+charge an early check-in fee if applicable, then
+// finalize check-in. Exported so it can be triggered from Dashboard too.
 // ---------------------------------------------------------------
-function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) {
+export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) {
   const [guestFront, setGuestFront] = useState(null);
   const [guestBack, setGuestBack] = useState(null);
   const [guestFrontUrl, setGuestFrontUrl] = useState(null);
@@ -535,6 +547,8 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
     }))
   );
   const [saving, setSaving] = useState(false);
+  const early = isEarlyCheckinNow();
+  const [earlyFee, setEarlyFee] = useState(0);
 
   useEffect(() => {
     if (guest?.id_proof_front_path) {
@@ -605,7 +619,7 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
       );
       if (!proceed) return;
     }
-    onConfirm();
+    onConfirm({ early, earlyFee: Number(earlyFee) || 0 });
   };
 
   return (
@@ -613,6 +627,17 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
         Take a clear photo of the front and back of each guest's ID proof. Photos are stored securely and linked to this guest's record for future stays.
       </p>
+
+      {early && (
+        <div style={{ background: "#fff8ea", border: "1px solid rgba(201,154,60,0.4)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>
+            ⚡ Early check-in — standard check-in is 12:00 PM
+          </div>
+          <Field label="Early check-in fee (optional — leave 0 to waive)">
+            <input className="input" type="number" min={0} value={earlyFee} onChange={(e) => setEarlyFee(e.target.value)} />
+          </Field>
+        </div>
+      )}
 
       <div style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
         <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}>{guest ? guest.name : "Guest"} (main guest)</div>
@@ -654,6 +679,45 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
         </Button>
         <Button disabled={saving} onClick={confirm_}>
           {saving ? "Saving…" : "Confirm check-in"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------
+// CHECK-OUT — balance warning + late checkout fee if applicable.
+// Exported so it can be triggered from Dashboard too.
+// ---------------------------------------------------------------
+export function CheckOutModal({ booking, onClose, onConfirm }) {
+  const balance = booking.total - booking.paid_amount;
+  const late = isLateCheckoutNow();
+  const [lateFee, setLateFee] = useState(0);
+
+  return (
+    <Modal title="Check-out" onClose={onClose} width={400}>
+      {balance > 0 && (
+        <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--rust)" }}>⚠ Balance due: {currency(balance)}</div>
+          <div style={{ fontSize: 12, color: "var(--ink70)", marginTop: 2 }}>Please collect payment before the guest leaves.</div>
+        </div>
+      )}
+      {late && (
+        <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>
+            ⏰ Late checkout — standard check-out is 11:00 AM
+          </div>
+          <Field label="Late checkout fee (optional — leave 0 to waive)">
+            <input className="input" type="number" min={0} value={lateFee} onChange={(e) => setLateFee(e.target.value)} />
+          </Field>
+        </div>
+      )}
+      <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="dark" onClick={() => onConfirm({ late, lateFee: Number(lateFee) || 0 })}>
+          Confirm check-out
         </Button>
       </div>
     </Modal>
