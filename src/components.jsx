@@ -206,14 +206,26 @@ function hourNow() {
 // Early check-in only counts if this is happening ON the booking's scheduled
 // check-in date AND more than 2 hours before the 12:00 PM standard time.
 export function isEarlyCheckin(booking) {
-  if (!booking || booking.check_in !== todayISO()) return false;
-  return hourNow() < CHECKIN_HOUR - EARLY_CHECKIN_GRACE_HOURS;
+  if (!booking) return false;
+  const today = todayISO();
+  // Arriving before the scheduled check-in date at all — always early, no time check needed.
+  if (today < booking.check_in) return true;
+  // Arriving ON the scheduled date — only early if it's well before the 12:00 PM standard time.
+  if (today === booking.check_in) return hourNow() < CHECKIN_HOUR - EARLY_CHECKIN_GRACE_HOURS;
+  // Arriving after the scheduled date (a delayed check-in) is not "early".
+  return false;
 }
 // Late checkout only counts if this is happening ON the booking's scheduled
 // check-out date AND more than 1 hour after the 11:00 AM standard time.
 export function isLateCheckout(booking) {
-  if (!booking || booking.check_out !== todayISO()) return false;
-  return hourNow() >= CHECKOUT_HOUR + LATE_CHECKOUT_GRACE_HOURS;
+  if (!booking) return false;
+  const today = todayISO();
+  // Leaving after the scheduled check-out date at all — always late, no time check needed.
+  if (today > booking.check_out) return true;
+  // Leaving ON the scheduled date — only late if it's well after the 11:00 AM standard time.
+  if (today === booking.check_out) return hourNow() >= CHECKOUT_HOUR + LATE_CHECKOUT_GRACE_HOURS;
+  // Leaving before the scheduled date isn't "late".
+  return false;
 }
 
 // Opens a blank tab immediately (synchronously, tied to the click) and fills
