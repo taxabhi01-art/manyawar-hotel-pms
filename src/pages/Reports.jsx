@@ -5,6 +5,7 @@ import { SectionTitle, Field, Button, Modal, currency, todayISO } from "../compo
 
 export default function Reports({ rooms, guests, bookings, staff, attendance }) {
   const [exportOpen, setExportOpen] = useState(false);
+  const [monthsBack, setMonthsBack] = useState(6);
   const today = todayISO();
 
   const last15 = useMemo(() => sumPaidInRange(bookings, daysAgo(15), today), [bookings]);
@@ -24,6 +25,37 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
       revenue: (bookings || []).reduce((sum, b) => sum + (b.payments || []).filter((p) => p.paid_on === d).reduce((s, p) => s + p.amount, 0), 0),
     }));
   }, [bookings]);
+
+  // Pick any number of months back to compare revenue — useful for
+  // "how does this quarter/half-year compare" style decisions.
+  const monthlyChart = useMemo(() => {
+    const months = [];
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      months.push(d.toISOString().slice(0, 7));
+    }
+    return months.map((m) => ({
+      month: m.slice(2),
+      revenue: (bookings || []).reduce(
+        (sum, b) => sum + (b.payments || []).filter((p) => (p.paid_on || "").startsWith(m)).reduce((s, p) => s + p.amount, 0),
+        0
+      ),
+    }));
+  }, [bookings, monthsBack]);
+
+  // Which rooms get booked the most — helps with pricing/marketing decisions.
+  const roomPopularity = useMemo(() => {
+    const counts = {};
+    bookings.forEach((b) => {
+      counts[b.room_id] = (counts[b.room_id] || 0) + 1;
+    });
+    return rooms
+      .map((r) => ({ room: r.number, bookings: counts[r.id] || 0 }))
+      .sort((a, b) => b.bookings - a.bookings)
+      .slice(0, 12);
+  }, [rooms, bookings]);
+
 
   return (
     <div>
@@ -72,6 +104,48 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
             <Bar dataKey="revenue" fill="#b8863f" radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      <SectionTitle
+        eyebrow="Trend"
+        title="Revenue by month"
+        action={
+          <select className="input" style={{ width: 140 }} value={monthsBack} onChange={(e) => setMonthsBack(Number(e.target.value))}>
+            {[3, 6, 12, 18, 24].map((n) => (
+              <option key={n} value={n}>
+                Last {n} months
+              </option>
+            ))}
+          </select>
+        }
+      />
+      <div className="stat-card" style={{ marginBottom: 30 }}>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={monthlyChart}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--hairline)" vertical={false} />
+            <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={44} />
+            <Tooltip formatter={(v) => currency(v)} />
+            <Bar dataKey="revenue" fill="#16233A" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <SectionTitle eyebrow="Analytics" title="Most-booked rooms" />
+      <div className="stat-card" style={{ marginBottom: 30 }}>
+        {roomPopularity.every((r) => r.bookings === 0) ? (
+          <p style={{ fontSize: 13, color: "var(--ink45)", margin: 0 }}>No bookings yet to analyze.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={Math.max(180, roomPopularity.length * 28)}>
+            <BarChart data={roomPopularity} layout="vertical" margin={{ left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--hairline)" horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <YAxis type="category" dataKey="room" tick={{ fontSize: 11, fontFamily: "var(--font-mono)" }} axisLine={false} tickLine={false} width={40} />
+              <Tooltip />
+              <Bar dataKey="bookings" name="Total bookings" fill="#c99a3c" radius={[0, 3, 3, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {exportOpen && (

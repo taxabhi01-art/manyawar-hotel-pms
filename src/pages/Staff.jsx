@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, todayISO, STAFF_ROLES, ATTENDANCE_STATUS } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, todayISO, whatsappLink, STAFF_ROLES, ATTENDANCE_STATUS } from "../components.jsx";
 import { addStaff, updateStaff, deleteStaff, addTask, updateTask, deleteTask, upsertAttendance } from "../lib/api.js";
 
 export default function Staff({ staff, rooms, tasks, attendance, reload }) {
@@ -89,7 +89,17 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
                     className="input"
                     style={{ width: 160 }}
                     defaultValue=""
-                    onChange={(e) => e.target.value && claimTask(t, e.target.value)}
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      claimTask(t, e.target.value);
+                      const assignedStaff = staff.find((s) => s.id === e.target.value);
+                      if (assignedStaff?.phone) {
+                        window.open(
+                          whatsappLink(assignedStaff.phone, `Hi ${assignedStaff.name}, you've been assigned: "${t.task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`),
+                          "_blank"
+                        );
+                      }
+                    }}
                   >
                     <option value="">Assign to…</option>
                     {staff
@@ -127,6 +137,20 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
                 <span style={{ fontSize: 12, color: "var(--ink45)" }}>{s.shift} shift</span>
                 <Pill color={status ? attendanceColor[status] : "#46536b"}>{status ? `Today: ${status}` : "Not marked"}</Pill>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  {s.phone && myTasks.filter((t) => !t.done).length > 0 && (
+                    <a
+                      className="btn btn-ghost"
+                      href={whatsappLink(
+                        s.phone,
+                        `Hi ${s.name}, your pending tasks:\n${myTasks.filter((t) => !t.done).map((t) => `- ${t.task} (Room ${rooms.find((r) => r.id === t.room_id)?.number || ""})`).join("\n")}\n— MANYAWAR HOTEL`
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ textDecoration: "none" }}
+                    >
+                      WhatsApp tasks
+                    </a>
+                  )}
                   <Button variant="ghost" onClick={() => setTaskFor(taskFor === s.id ? null : s.id)}>
                     Tasks ({myTasks.filter((t) => !t.done).length})
                   </Button>

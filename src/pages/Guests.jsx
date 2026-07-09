@@ -36,9 +36,16 @@ export default function Guests({ guests, bookings, reload }) {
   };
 
   const viewId = async (guest) => {
-    if (!guest.id_proof_image_path) return;
-    const { data } = await getIdProofSignedUrl(guest.id_proof_image_path);
-    if (data) setIdModal({ name: guest.name, url: data.signedUrl });
+    const urls = {};
+    if (guest.id_proof_front_path) {
+      const { data } = await getIdProofSignedUrl(guest.id_proof_front_path);
+      if (data) urls.front = data.signedUrl;
+    }
+    if (guest.id_proof_back_path) {
+      const { data } = await getIdProofSignedUrl(guest.id_proof_back_path);
+      if (data) urls.back = data.signedUrl;
+    }
+    setIdModal({ name: guest.name, ...urls });
   };
 
   const filtered = guests.filter((g) => {
@@ -77,13 +84,13 @@ export default function Guests({ guests, bookings, reload }) {
                 {stays} stay{stays === 1 ? "" : "s"}
               </span>
               {stays > 1 && <Pill color="#5f8863">Repeat guest</Pill>}
-              {g.id_proof_image_path ? (
+              {g.id_proof_front_path || g.id_proof_back_path ? (
                 <Pill color="#5f8863">ID on file</Pill>
               ) : (
                 <Pill color="#a6452f">No ID scan</Pill>
               )}
               <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                {g.id_proof_image_path && (
+                {(g.id_proof_front_path || g.id_proof_back_path) && (
                   <Button variant="ghost" onClick={() => viewId(g)}>
                     View ID
                   </Button>
@@ -105,7 +112,21 @@ export default function Guests({ guests, bookings, reload }) {
       {modal && <GuestModal guest={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={saveGuest} busy={busy} />}
       {idModal && (
         <Modal title={`${idModal.name} — ID proof`} onClose={() => setIdModal(null)} width={420}>
-          <img src={idModal.url} alt="ID proof" style={{ width: "100%", borderRadius: 8, border: "1px solid var(--hairline)" }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {idModal.front && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink45)", marginBottom: 4, textTransform: "uppercase" }}>Front</div>
+                <img src={idModal.front} alt="ID front" style={{ width: "100%", borderRadius: 8, border: "1px solid var(--hairline)" }} />
+              </div>
+            )}
+            {idModal.back && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink45)", marginBottom: 4, textTransform: "uppercase" }}>Back</div>
+                <img src={idModal.back} alt="ID back" style={{ width: "100%", borderRadius: 8, border: "1px solid var(--hairline)" }} />
+              </div>
+            )}
+            {!idModal.front && !idModal.back && <p style={{ fontSize: 13, color: "var(--ink45)" }}>No image available.</p>}
+          </div>
         </Modal>
       )}
     </div>

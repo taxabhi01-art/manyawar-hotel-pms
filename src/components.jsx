@@ -159,6 +159,26 @@ export function IdCaptureField({ label, file, onFile, existingUrl, uploading }) 
   );
 }
 
+export const EXPENSE_CATEGORIES = [
+  "Salaries",
+  "Utilities (electricity/water)",
+  "Maintenance & repairs",
+  "Supplies & housekeeping",
+  "Food & beverage",
+  "Marketing",
+  "Taxes & licenses",
+  "Other",
+];
+
+// Builds a wa.me link that opens WhatsApp with a pre-filled message — free,
+// no API/account needed. Staff still has to tap "Send" themselves; this does
+// not send automatically.
+export function whatsappLink(phone, message) {
+  const digits = (phone || "").replace(/[^\d]/g, "");
+  const withCountryCode = digits.length === 10 ? `91${digits}` : digits;
+  return `https://wa.me/${withCountryCode}?text=${encodeURIComponent(message)}`;
+}
+
 export const STATUS = {
   available: { label: "Available", color: "#5f8863" },
   occupied: { label: "Occupied", color: "#a6452f" },

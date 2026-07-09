@@ -9,8 +9,20 @@ import Billing from "./pages/Billing.jsx";
 import Staff from "./pages/Staff.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
+import Finance from "./pages/Finance.jsx";
 import CalendarPage from "./pages/Calendar.jsx";
-import { listRooms, listGuests, listBookings, listStaff, listTasks, listAttendance, listCoGuests, getMyProfile, updateTask } from "./lib/api.js";
+import {
+  listRooms,
+  listGuests,
+  listBookings,
+  listStaff,
+  listTasks,
+  listAttendance,
+  listCoGuests,
+  listExpenses,
+  getMyProfile,
+  updateTask,
+} from "./lib/api.js";
 
 const BASE_NAV = [
   { id: "dashboard", label: "Dashboard" },
@@ -22,6 +34,7 @@ const BASE_NAV = [
   { id: "staff", label: "Staff" },
 ];
 const OWNER_NAV = [
+  { id: "finance", label: "Finance" },
   { id: "reports", label: "Reports" },
   { id: "settings", label: "Settings" },
 ];
@@ -30,7 +43,7 @@ export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
   const [role, setRole] = useState(null); // 'owner' | 'staff'
   const [tab, setTab] = useState("dashboard");
-  const [data, setData] = useState({ rooms: [], guests: [], bookings: [], staff: [], tasks: [], attendance: [], coGuests: [] });
+  const [data, setData] = useState({ rooms: [], guests: [], bookings: [], staff: [], tasks: [], attendance: [], coGuests: [], expenses: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notifiedOnce, setNotifiedOnce] = useState(false);
@@ -52,7 +65,7 @@ export default function App() {
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [rooms, guests, bookings, staff, tasks, attendance, coGuests] = await Promise.all([
+    const [rooms, guests, bookings, staff, tasks, attendance, coGuests, expenses] = await Promise.all([
       listRooms(),
       listGuests(),
       listBookings(),
@@ -60,9 +73,12 @@ export default function App() {
       listTasks(),
       listAttendance(),
       listCoGuests(),
+      listExpenses(),
     ]);
-    const firstError = [rooms, guests, bookings, staff, tasks, attendance, coGuests].find((r) => r.error);
-    if (firstError) setError(firstError.error.message);
+    // Expenses are owner-only at the database level, so a staff login will get
+    // an error here — that's expected, not a bug; just show an empty list for them.
+    const criticalError = [rooms, guests, bookings, staff, tasks, attendance, coGuests].find((r) => r.error);
+    if (criticalError) setError(criticalError.error.message);
     setData({
       rooms: rooms.data || [],
       guests: guests.data || [],
@@ -71,6 +87,7 @@ export default function App() {
       tasks: tasks.data || [],
       attendance: attendance.data || [],
       coGuests: coGuests.data || [],
+      expenses: expenses.data || [],
     });
     setLoading(false);
   }, []);
@@ -205,6 +222,7 @@ export default function App() {
             {tab === "staff" && (
               <Staff staff={data.staff} rooms={data.rooms} tasks={data.tasks} attendance={data.attendance} reload={reload} />
             )}
+            {tab === "finance" && role === "owner" && <Finance bookings={data.bookings} expenses={data.expenses} reload={reload} />}
             {tab === "reports" && role === "owner" && (
               <Reports rooms={data.rooms} guests={data.guests} bookings={data.bookings} staff={data.staff} attendance={data.attendance} />
             )}

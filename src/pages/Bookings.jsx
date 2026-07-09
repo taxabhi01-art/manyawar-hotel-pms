@@ -13,6 +13,7 @@ import {
   todayISO,
   isRoomAvailableForDates,
   computeRoomRate,
+  whatsappLink,
   BOOKING_SOURCES,
 } from "../components.jsx";
 import {
@@ -34,6 +35,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
   const [editModal, setEditModal] = useState(null);
   const [checkInModal, setCheckInModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
+  const [confirmSendModal, setConfirmSendModal] = useState(null);
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(false);
 
@@ -44,9 +46,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
   const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, coGuestsCount }) => {
     setBusy(true);
     let guestId = guest.id;
+    let fullGuest = guest;
     if (!guestId) {
       const { data } = await addGuest(guest);
       guestId = data?.id;
+      fullGuest = data;
     }
     const room = roomOf(roomId);
     const nights = nightsBetween(checkIn, checkOut);
@@ -73,6 +77,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
     setBusy(false);
     setModal(null);
     reload();
+    if (fullGuest?.phone) {
+      setConfirmSendModal({ guest: fullGuest, room, checkIn, checkOut, total: subtotal });
+    }
   };
 
   const finishCheckIn = async (booking) => {
@@ -102,10 +109,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
     if (b.status === "checked-in") {
       await updateRoom(b.room_id, { status: "available" });
     }
-    reload();
-  };
-  const refundDeposit = async (b) => {
-    await updateBooking(b.id, { deposit_refunded: true });
     reload();
   };
   const saveDates = async (booking, { checkIn, checkOut }) => {
@@ -191,9 +194,8 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
                 {1 + (b.co_guests_count || 0)} guest{b.co_guests_count ? "s" : ""}
               </span>
               {b.deposit > 0 && (
-                <span style={{ fontSize: 11.5, color: b.deposit_refunded ? "var(--ink45)" : "var(--brass)" }}>
-                  Deposit {currency(b.deposit)}
-                  {b.deposit_refunded ? " (refunded)" : ""}
+                <span style={{ fontSize: 11.5, color: (b.deposit_status || "held") === "held" ? "var(--brass)" : "var(--ink45)" }}>
+                  Deposit {currency(b.deposit)} ({b.deposit_status || "held"})
                 </span>
               )}
               <Pill color={b.status === "reserved" ? "#c99a3c" : b.status === "checked-in" ? "#5f8863" : "#46536b"}>{b.status}</Pill>
@@ -204,11 +206,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
                 {b.status !== "checked-out" && (
                   <Button variant="ghost" onClick={() => setEditModal(b)}>
                     Edit dates
-                  </Button>
-                )}
-                {b.status === "checked-out" && b.deposit > 0 && !b.deposit_refunded && (
-                  <Button variant="ghost" onClick={() => refundDeposit(b)}>
-                    Refund deposit
                   </Button>
                 )}
                 {b.status === "reserved" && <Button onClick={() => setCheckInModal(b)}>Check in</Button>}
@@ -263,7 +260,35 @@ export default function Bookings({ rooms, guests, bookings, coGuests, reload }) 
           onClose={() => setDetailModal(null)}
         />
       )}
+      {confirmSendModal && (
+        <WhatsAppConfirmModal info={confirmSendModal} onClose={() => setConfirmSendModal(null)} />
+      )}
     </div>
+  );
+}
+
+function WhatsAppConfirmModal({ info, onClose }) {
+  const { guest, room, checkIn, checkOut, total } = info;
+  const message = `Hi ${guest.name}, your booking at MANYAWAR HOTEL is confirmed!\nRoom: ${room?.number || ""} (${room?.type || ""})\nCheck-in: ${fmtDate(checkIn)}\nCheck-out: ${fmtDate(checkOut)}\nTotal: ${currency(total)}\n\nWe look forward to hosting you!`;
+  return (
+    <Modal title="Booking created" onClose={onClose} width={380}>
+      <p style={{ fontSize: 13 }}>Want to send a WhatsApp confirmation to {guest.name}?</p>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Skip
+        </Button>
+        <a
+          className="btn"
+          href={whatsappLink(guest.phone, message)}
+          target="_blank"
+          rel="noreferrer"
+          style={{ textDecoration: "none" }}
+          onClick={onClose}
+        >
+          Send WhatsApp confirmation
+        </a>
+      </div>
+    </Modal>
   );
 }
 
@@ -492,28 +517,41 @@ function EditDatesModal({ booking, bookings, onClose, onSave }) {
 // co-guests right from the phone camera, then finalize check-in.
 // ---------------------------------------------------------------
 function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) {
-  const [guestFile, setGuestFile] = useState(null);
-  const [guestExistingUrl, setGuestExistingUrl] = useState(null);
+  const [guestFront, setGuestFront] = useState(null);
+  const [guestBack, setGuestBack] = useState(null);
+  const [guestFrontUrl, setGuestFrontUrl] = useState(null);
+  const [guestBackUrl, setGuestBackUrl] = useState(null);
   const slots = Math.max(booking.co_guests_count || 0, existingCoGuests.length);
   const [coForms, setCoForms] = useState(
     Array.from({ length: slots }, (_, i) => ({
       id: existingCoGuests[i]?.id || null,
       name: existingCoGuests[i]?.name || "",
-      file: null,
-      existingUrl: null,
-      existingPath: existingCoGuests[i]?.id_proof_image_path || null,
+      frontFile: null,
+      backFile: null,
+      frontUrl: null,
+      backUrl: null,
+      existingFrontPath: existingCoGuests[i]?.id_proof_front_path || null,
+      existingBackPath: existingCoGuests[i]?.id_proof_back_path || null,
     }))
   );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (guest?.id_proof_image_path) {
-      getIdProofSignedUrl(guest.id_proof_image_path).then(({ data }) => data && setGuestExistingUrl(data.signedUrl));
+    if (guest?.id_proof_front_path) {
+      getIdProofSignedUrl(guest.id_proof_front_path).then(({ data }) => data && setGuestFrontUrl(data.signedUrl));
+    }
+    if (guest?.id_proof_back_path) {
+      getIdProofSignedUrl(guest.id_proof_back_path).then(({ data }) => data && setGuestBackUrl(data.signedUrl));
     }
     coForms.forEach((f, i) => {
-      if (f.existingPath) {
-        getIdProofSignedUrl(f.existingPath).then(({ data }) => {
-          if (data) setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, existingUrl: data.signedUrl } : p)));
+      if (f.existingFrontPath) {
+        getIdProofSignedUrl(f.existingFrontPath).then(({ data }) => {
+          if (data) setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, frontUrl: data.signedUrl } : p)));
+        });
+      }
+      if (f.existingBackPath) {
+        getIdProofSignedUrl(f.existingBackPath).then(({ data }) => {
+          if (data) setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, backUrl: data.signedUrl } : p)));
         });
       }
     });
@@ -525,22 +563,36 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
   const confirm_ = async () => {
     setSaving(true);
     try {
-      if (guest && guestFile) {
-        const path = `guest-${guest.id}-${Date.now()}.jpg`;
-        const { error } = await uploadIdProof(path, guestFile);
-        if (!error) await updateGuest(guest.id, { id_proof_image_path: path });
+      if (guest && (guestFront || guestBack)) {
+        const patch = {};
+        if (guestFront) {
+          const path = `guest-${guest.id}-front-${Date.now()}.jpg`;
+          const { error } = await uploadIdProof(path, guestFront);
+          if (!error) patch.id_proof_front_path = path;
+        }
+        if (guestBack) {
+          const path = `guest-${guest.id}-back-${Date.now()}.jpg`;
+          const { error } = await uploadIdProof(path, guestBack);
+          if (!error) patch.id_proof_back_path = path;
+        }
+        if (Object.keys(patch).length) await updateGuest(guest.id, patch);
       }
       for (const f of coForms) {
-        if (!f.name.trim() && !f.file) continue;
-        let path = f.existingPath;
-        if (f.file) {
-          path = `co-guest-${booking.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
-          await uploadIdProof(path, f.file);
+        if (!f.name.trim() && !f.frontFile && !f.backFile) continue;
+        let frontPath = f.existingFrontPath;
+        let backPath = f.existingBackPath;
+        if (f.frontFile) {
+          frontPath = `co-guest-${booking.id}-front-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+          await uploadIdProof(frontPath, f.frontFile);
+        }
+        if (f.backFile) {
+          backPath = `co-guest-${booking.id}-back-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+          await uploadIdProof(backPath, f.backFile);
         }
         if (f.id) {
-          await updateCoGuest(f.id, { name: f.name.trim(), id_proof_image_path: path });
-        } else if (f.name.trim() || path) {
-          await addCoGuest({ booking_id: booking.id, name: f.name.trim(), id_proof_image_path: path });
+          await updateCoGuest(f.id, { name: f.name.trim(), id_proof_front_path: frontPath, id_proof_back_path: backPath });
+        } else if (f.name.trim() || frontPath || backPath) {
+          await addCoGuest({ booking_id: booking.id, name: f.name.trim(), id_proof_front_path: frontPath, id_proof_back_path: backPath });
         }
       }
     } finally {
@@ -559,12 +611,15 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
   return (
     <Modal title="Check-in — verify ID" onClose={onClose} width={520}>
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
-        Take a clear photo of each guest's ID proof. Photos are stored securely and linked to this guest's record for future stays.
+        Take a clear photo of the front and back of each guest's ID proof. Photos are stored securely and linked to this guest's record for future stays.
       </p>
 
       <div style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
         <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}>{guest ? guest.name : "Guest"} (main guest)</div>
-        <IdCaptureField label="ID proof photo" file={guestFile} onFile={setGuestFile} existingUrl={guestExistingUrl} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <IdCaptureField label="ID proof — front" file={guestFront} onFile={setGuestFront} existingUrl={guestFrontUrl} />
+          <IdCaptureField label="ID proof — back" file={guestBack} onFile={setGuestBack} existingUrl={guestBackUrl} />
+        </div>
       </div>
 
       {coForms.map((f, i) => (
@@ -576,12 +631,18 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
               onChange={(e) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, name: e.target.value } : p)))}
             />
           </Field>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
             <IdCaptureField
-              label="ID proof photo"
-              file={f.file}
-              existingUrl={f.existingUrl}
-              onFile={(file) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, file } : p)))}
+              label="ID proof — front"
+              file={f.frontFile}
+              existingUrl={f.frontUrl}
+              onFile={(file) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, frontFile: file } : p)))}
+            />
+            <IdCaptureField
+              label="ID proof — back"
+              file={f.backFile}
+              existingUrl={f.backUrl}
+              onFile={(file) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, backFile: file } : p)))}
             />
           </div>
         </div>
@@ -604,16 +665,23 @@ function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) 
 // co-guests, and their scanned ID photos.
 // ---------------------------------------------------------------
 function GuestDetailModal({ booking, guest, coGuests, onClose }) {
-  const [guestUrl, setGuestUrl] = useState(null);
+  const [guestFrontUrl, setGuestFrontUrl] = useState(null);
+  const [guestBackUrl, setGuestBackUrl] = useState(null);
   const [coUrls, setCoUrls] = useState({});
 
   useEffect(() => {
-    if (guest?.id_proof_image_path) {
-      getIdProofSignedUrl(guest.id_proof_image_path).then(({ data }) => data && setGuestUrl(data.signedUrl));
+    if (guest?.id_proof_front_path) {
+      getIdProofSignedUrl(guest.id_proof_front_path).then(({ data }) => data && setGuestFrontUrl(data.signedUrl));
+    }
+    if (guest?.id_proof_back_path) {
+      getIdProofSignedUrl(guest.id_proof_back_path).then(({ data }) => data && setGuestBackUrl(data.signedUrl));
     }
     coGuests.forEach((c) => {
-      if (c.id_proof_image_path) {
-        getIdProofSignedUrl(c.id_proof_image_path).then(({ data }) => data && setCoUrls((prev) => ({ ...prev, [c.id]: data.signedUrl })));
+      if (c.id_proof_front_path) {
+        getIdProofSignedUrl(c.id_proof_front_path).then(({ data }) => data && setCoUrls((prev) => ({ ...prev, [c.id + "_front"]: data.signedUrl })));
+      }
+      if (c.id_proof_back_path) {
+        getIdProofSignedUrl(c.id_proof_back_path).then(({ data }) => data && setCoUrls((prev) => ({ ...prev, [c.id + "_back"]: data.signedUrl })));
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -621,14 +689,17 @@ function GuestDetailModal({ booking, guest, coGuests, onClose }) {
 
   return (
     <Modal title="Guest details" onClose={onClose} width={480}>
-      <div style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 12, display: "flex", gap: 12 }}>
-        {guestUrl && <img src={guestUrl} alt="ID" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6 }} />}
-        <div>
-          <div style={{ fontWeight: 700 }}>{guest ? guest.name : "Guest removed"} {guest?.vip && "⭐"}</div>
-          <div style={{ fontSize: 12.5, color: "var(--ink45)" }}>{guest?.phone}</div>
-          <div style={{ fontSize: 12.5, color: "var(--ink45)" }}>{guest?.email}</div>
-          {!guestUrl && <div style={{ fontSize: 11.5, color: "var(--rust)", marginTop: 4 }}>No ID proof on file yet</div>}
+      <div style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>
+          {guest ? guest.name : "Guest removed"} {guest?.vip && "⭐"}
         </div>
+        <div style={{ fontSize: 12.5, color: "var(--ink45)" }}>{guest?.phone}</div>
+        <div style={{ fontSize: 12.5, color: "var(--ink45)", marginBottom: 8 }}>{guest?.email}</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          {guestFrontUrl && <img src={guestFrontUrl} alt="ID front" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 6 }} />}
+          {guestBackUrl && <img src={guestBackUrl} alt="ID back" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 6 }} />}
+        </div>
+        {!guestFrontUrl && !guestBackUrl && <div style={{ fontSize: 11.5, color: "var(--rust)", marginTop: 4 }}>No ID proof on file yet</div>}
       </div>
       {coGuests.length === 0 ? (
         <p style={{ fontSize: 12.5, color: "var(--ink45)" }}>
@@ -636,12 +707,13 @@ function GuestDetailModal({ booking, guest, coGuests, onClose }) {
         </p>
       ) : (
         coGuests.map((c) => (
-          <div key={c.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 8, display: "flex", gap: 12 }}>
-            {coUrls[c.id] && <img src={coUrls[c.id]} alt="ID" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.name || "Co-guest"}</div>
-              {!coUrls[c.id] && <div style={{ fontSize: 11.5, color: "var(--rust)" }}>No ID proof on file yet</div>}
+          <div key={c.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 8 }}>
+            <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 6 }}>{c.name || "Co-guest"}</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              {coUrls[c.id + "_front"] && <img src={coUrls[c.id + "_front"]} alt="ID front" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
+              {coUrls[c.id + "_back"] && <img src={coUrls[c.id + "_back"]} alt="ID back" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
             </div>
+            {!coUrls[c.id + "_front"] && !coUrls[c.id + "_back"] && <div style={{ fontSize: 11.5, color: "var(--rust)" }}>No ID proof on file yet</div>}
           </div>
         ))
       )}

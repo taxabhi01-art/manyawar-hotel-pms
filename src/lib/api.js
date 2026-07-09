@@ -96,7 +96,19 @@ export async function upsertAttendance(records) {
   return supabase.from("attendance").upsert(records, { onConflict: "staff_id,date" });
 }
 
-// ---------- CO-GUESTS ----------
+// ---------- EXPENSES (owner only) ----------
+export async function listExpenses() {
+  return supabase.from("expenses").select("*").order("expense_date", { ascending: false });
+}
+export async function addExpense(expense) {
+  return supabase.from("expenses").insert(expense).select().single();
+}
+export async function updateExpense(id, patch) {
+  return supabase.from("expenses").update(patch).eq("id", id);
+}
+export async function deleteExpense(id) {
+  return supabase.from("expenses").delete().eq("id", id);
+}
 export async function listCoGuests() {
   return supabase.from("co_guests").select("*");
 }

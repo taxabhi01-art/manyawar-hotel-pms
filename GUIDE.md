@@ -170,3 +170,35 @@ Is update ke baad app ko phone ke **home screen pe icon** ki tarah install kar s
 4. Icon home screen pe aa jayega
 
 Dono jagah, icon pe tap karne se app **poori screen** mein khulega, browser ka koi UI nahi dikhega — bilkul Play Store se install kiye app jaisa feel hoga, bas ye web-based hai (isliye Play Store pe listing ki zaroorat nahi).
+
+## UPDATE 5: Finance, deposit adjust, WhatsApp, front/back ID, proforma
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v5.sql` ka content paste karke Run karo.
+
+### Step B — GitHub pe naya code upload karo (poora zip wapas)
+
+### Naye features:
+
+**1. Finance tab (sirf owner ko dikhega)** — Income (bookings se) aur manual expenses (category ke saath) track karo. Ye tab **database level** pe bhi protected hai — staff login se koshish karega to bhi data nahi milega, sirf UI mein chhupaya nahi gaya.
+
+**2. Deposit adjust ya refund** — Billing tab mein ab deposit ke 2 options hain: **"Adjust deposit to bill"** (deposit ko bill mein add kar deta hai, balance kam ho jata hai) ya **"Refund deposit"** (guest ko wapas de diya, cash mein).
+
+**3. Naye reports** — Reports tab mein: mahine-wise revenue comparison (3/6/12/18/24 mahine choose kar sakte ho), aur "Most-booked rooms" chart (kaunsa room sabse zyada book hota hai).
+
+**5. Proforma + Print** — Billing mein "Proforma / Print" button — 2 template design (Branded / Simple), PDF download ya seedha browser se **Print** kar sakte ho. "Tax Invoice PDF" wahi GST wala formal invoice hai, alag button.
+
+**6. WhatsApp (free, manual-send)** — 3 jagah add kiya:
+   - Booking banane ke baad "Send WhatsApp confirmation" popup
+   - Billing mein balance-due guests ko "WhatsApp reminder"
+   - Staff ko task assign karne par automatically WhatsApp khulta hai pre-filled message ke saath
+   
+   **Zaroori baat:** Ye `wa.me` links use karta hai — **bilkul free hai**, koi account/API nahi chahiye, lekin staff ko khud "Send" button dabana padta hai WhatsApp mein. Automatic bhejna (bina tap kiye) ke liye paid WhatsApp Business API chahiye hogi (jiski cost hum discuss kar chuke hain).
+
+**7. ID proof front + back** — Check-in ke time ab har guest/co-guest ke liye **2 photo** capture hoti hai (front + back), dono alag-alag save hoti hain aur Guest details mein dono dikhti hain.
+
+**8. Cash flow reports** — Finance tab mein Daily / Monthly / Yearly toggle — jitne bhi months peeche dekhne hain (3 se 24 tak) choose kar sakte ho.
+
+### Extra jo maine add kiya (na maanga tha, lekin useful laga)
+- Expense category-wise breakdown (is mahine kahan sabse zyada kharch hua)
+- Booking source tracking already tha, ab reports mein room-popularity se combine hota hai decision lene ke liye
