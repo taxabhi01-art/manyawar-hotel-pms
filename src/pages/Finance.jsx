@@ -34,6 +34,23 @@ export default function Finance({ bookings, expenses, staff, reload }) {
   const expenseThisMonth = expenses.filter((e) => e.expense_date?.startsWith(thisMonthPrefix)).reduce((s, e) => s + e.amount, 0);
   const netThisMonth = incomeThisMonth - expenseThisMonth;
 
+  // ---- Today's cash flow — by payment mode, expenses, net, and pending ----
+  const todaysPayments = useMemo(() => allPayments.filter((p) => p.paid_on === today), [allPayments, today]);
+  const byModeToday = useMemo(() => {
+    const map = {};
+    todaysPayments.forEach((p) => (map[p.mode] = (map[p.mode] || 0) + p.amount));
+    return map;
+  }, [todaysPayments]);
+  const cashToday = byModeToday["Cash"] || 0;
+  const upiToday = byModeToday["UPI"] || 0;
+  const otherModesToday = Object.entries(byModeToday)
+    .filter(([mode]) => mode !== "Cash" && mode !== "UPI")
+    .reduce((s, [, amt]) => s + amt, 0);
+  const totalReceivedToday = cashToday + upiToday + otherModesToday;
+  const expensesToday = expenses.filter((e) => e.expense_date === today).reduce((s, e) => s + e.amount, 0);
+  const netToday = totalReceivedToday - expensesToday;
+  const totalPending = bookings.reduce((s, b) => s + Math.max(0, (b.total || 0) - (b.paid_amount || 0)), 0);
+
   // ---- Cash flow chart data ----
   const chartData = useMemo(() => {
     const buckets = [];
@@ -76,6 +93,38 @@ export default function Finance({ bookings, expenses, staff, reload }) {
   return (
     <div>
       <SectionTitle eyebrow="Owner only" title="Finance" action={<Button onClick={() => setExpenseModal("new")}>+ Add expense</Button>} />
+
+      <SectionTitle eyebrow="Today" title={`Cash flow — ${fmtDate(today)}`} />
+      <div className="stat-grid" style={{ marginBottom: 30 }}>
+        <div className="stat-card">
+          <div className="label">Cash received</div>
+          <div className="value" style={{ color: "var(--sage)" }}>{currency(cashToday)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">UPI received</div>
+          <div className="value" style={{ color: "var(--sage)" }}>{currency(upiToday)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Other (Bank/Card)</div>
+          <div className="value" style={{ color: "var(--sage)" }}>{currency(otherModesToday)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Total received today</div>
+          <div className="value">{currency(totalReceivedToday)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Expenses today</div>
+          <div className="value" style={{ color: "var(--rust)" }}>{currency(expensesToday)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Net today</div>
+          <div className="value" style={{ color: netToday >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netToday)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Total pending (all bookings)</div>
+          <div className="value" style={{ color: "var(--rust)" }}>{currency(totalPending)}</div>
+        </div>
+      </div>
 
       <div className="stat-grid">
         <div className="stat-card">

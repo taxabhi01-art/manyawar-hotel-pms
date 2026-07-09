@@ -75,6 +75,18 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [bookings]);
 
+  // How money comes in — Cash vs UPI vs Bank/Card/Other — ties into the
+  // Finance tab's daily cash-flow numbers.
+  const paymentModeBreakdown = useMemo(() => {
+    const counts = {};
+    bookings.forEach((b) => {
+      (b.payments || []).forEach((p) => {
+        counts[p.mode] = (counts[p.mode] || 0) + p.amount;
+      });
+    });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [bookings]);
+
 
   return (
     <div>
@@ -205,6 +217,25 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
             </ResponsiveContainer>
           )}
         </div>
+      </div>
+
+      <SectionTitle eyebrow="Analytics" title="Payments by mode (cash flow)" />
+      <div className="stat-card" style={{ marginBottom: 30, maxWidth: 460 }}>
+        {paymentModeBreakdown.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--ink45)", margin: 0 }}>No payments recorded yet.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            <PieChart>
+              <Pie data={paymentModeBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={90} paddingAngle={2}>
+                {paymentModeBreakdown.map((entry, i) => (
+                  <Cell key={entry.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v) => currency(v)} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {exportOpen && (

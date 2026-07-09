@@ -294,3 +294,18 @@ Supabase → SQL Editor → `supabase-schema-v8.sql` Run karo.
    - "Undo" button se galti se add ho gayi entry wapas reverse kar sakte ho (stock aur bill dono wapas ho jayenge)
 
 Sab kuch automatic hai — ek baar item log karne ke baad, alag se kahin manually total update karne ki zaroorat nahi.
+
+## UPDATE 10: Aaj ka cash flow, night audit mein early/late count, payment-mode chart
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v9.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye features:
+
+**1. Finance mein "Aaj ka Cash Flow"** — naya section: aaj kitna **Cash** aaya, kitna **UPI** se, kitna **Bank/Card** se, total kitna receive hua, aaj ke **expenses**, **net** (bacha hua), aur **total pending** (sab bookings mila ke kitna balance due hai) — sab ek jagah.
+
+**2. Night Audit mein early check-in / late checkout count** — us din kitne guests early aaye aur kitne late gaye, dono alag stat card mein dikhega, aur "Run night audit" karte waqt ye history mein bhi save ho jata hai.
+
+**3. Reports mein payment-mode chart** — ek naya round (pie) chart "Payments by mode" — Cash/UPI/Bank/Card ka poora breakdown, kitna paisa kaunse mode se aaya.

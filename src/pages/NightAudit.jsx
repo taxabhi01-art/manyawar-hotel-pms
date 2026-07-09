@@ -24,6 +24,9 @@ export default function NightAudit({ rooms, bookings, guests, expenses, nightAud
 
   const expenseTotal = role === "owner" ? expenses.filter((e) => e.expense_date === date).reduce((s, e) => s + e.amount, 0) : null;
 
+  const earlyCheckinsToday = bookings.filter((b) => b.early_checkin && b.checked_in_at && b.checked_in_at.slice(0, 10) === date);
+  const lateCheckoutsToday = bookings.filter((b) => b.late_checkout && b.checked_out_at && b.checked_out_at.slice(0, 10) === date);
+
   const alreadyRun = nightAudits.find((a) => a.audit_date === date);
 
   const markNoShow = async (b) => {
@@ -41,6 +44,8 @@ export default function NightAudit({ rooms, bookings, guests, expenses, nightAud
       revenue,
       expenses: expenseTotal,
       no_shows: noShows.length,
+      early_checkins: earlyCheckinsToday.length,
+      late_checkouts: lateCheckoutsToday.length,
       notes: notes.trim() || null,
       run_by: runByEmail || null,
     });
@@ -81,6 +86,14 @@ export default function NightAudit({ rooms, bookings, guests, expenses, nightAud
           <div className="label">Revenue collected</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(revenue)}</div>
           {role === "owner" && <div className="sub">Expenses: {currency(expenseTotal)}</div>}
+        </div>
+        <div className="stat-card">
+          <div className="label">Early check-ins</div>
+          <div className="value" style={{ color: "var(--brass)" }}>{earlyCheckinsToday.length}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Late checkouts</div>
+          <div className="value" style={{ color: "var(--rust)" }}>{lateCheckoutsToday.length}</div>
         </div>
       </div>
 
@@ -134,6 +147,8 @@ export default function NightAudit({ rooms, bookings, guests, expenses, nightAud
             <span style={{ fontSize: 12.5, width: 90 }}>Occ. {a.occupancy_percent}%</span>
             <span style={{ fontSize: 12.5, color: "var(--sage)", width: 110 }}>{currency(a.revenue)}</span>
             {a.no_shows > 0 && <Pill color="#a6452f">{a.no_shows} no-show{a.no_shows === 1 ? "" : "s"}</Pill>}
+            {a.early_checkins > 0 && <Pill color="#b8863f">{a.early_checkins} early check-in{a.early_checkins === 1 ? "" : "s"}</Pill>}
+            {a.late_checkouts > 0 && <Pill color="#a6452f">{a.late_checkouts} late checkout{a.late_checkouts === 1 ? "" : "s"}</Pill>}
             <span style={{ flex: 1, fontSize: 12, color: "var(--ink45)" }}>{a.notes}</span>
           </div>
         ))

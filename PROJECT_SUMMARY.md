@@ -114,6 +114,7 @@ Migrations is order mein chalayi gayi hain (sab already run ho chuki hain live p
    `night_audits` table, `bookings.cancel_reason`
 8. `supabase-schema-v8.sql` — `inventory_items` (catalog), `inventory_usage` (auto stock-deduct +
    auto bill-add when logged against a booking), `bookings.items_total`
+9. `supabase-schema-v9.sql` — `night_audits.early_checkins` / `late_checkouts` counts
 
 Agar future mein koi naya SQL change ho, isi pattern mein `supabase-schema-v5.sql` banega —
 additive rehta hai (purana kabhi nahi todta), `create table if not exists` /
