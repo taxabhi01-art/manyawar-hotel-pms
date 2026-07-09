@@ -7,7 +7,6 @@ import { addPayment, updateBooking, getSettings } from "../lib/api.js";
 export default function Billing({ bookings, guests, rooms, reload }) {
   const [payModal, setPayModal] = useState(null);
   const [discountModal, setDiscountModal] = useState(null);
-  const [printModal, setPrintModal] = useState(null);
   const [settings, setSettings] = useState(null);
 
   useEffect(() => {
@@ -103,23 +102,17 @@ export default function Billing({ bookings, guests, rooms, reload }) {
                       </Button>
                     </>
                   )}
-                  {balance > 0 && g?.phone && (
+                  {g?.phone && (
                     <a
                       className="btn btn-ghost"
-                      href={whatsappLink(
-                        g.phone,
-                        `Hi ${g.name}, this is a reminder from ${settings?.hotel_name || "MANYAWAR HOTEL"} — your balance of ${currency(balance)} for Room ${r?.number || ""} is still due. Thank you!`
-                      )}
+                      href={whatsappLink(g.phone, buildBillMessage(b, g, r, settings || {}))}
                       target="_blank"
                       rel="noreferrer"
                       style={{ textDecoration: "none" }}
                     >
-                      WhatsApp reminder
+                      Send bill via WhatsApp
                     </a>
                   )}
-                  <Button variant="ghost" onClick={() => setPrintModal(b)}>
-                    Proforma / Print
-                  </Button>
                   <Button variant="ghost" onClick={() => downloadTaxInvoice(b, g, r, settings || {})}>
                     Tax Invoice PDF
                   </Button>
@@ -148,17 +141,35 @@ export default function Billing({ bookings, guests, rooms, reload }) {
       {discountModal && (
         <DiscountModal booking={discountModal} onClose={() => setDiscountModal(null)} onSave={(d, r) => applyDiscount(discountModal, d, r)} />
       )}
-      {printModal && (
-        <ProformaModal
-          booking={printModal}
-          guest={guests.find((x) => x.id === printModal.guest_id)}
-          room={rooms.find((x) => x.id === printModal.room_id)}
-          settings={settings || {}}
-          onClose={() => setPrintModal(null)}
-        />
-      )}
     </div>
   );
+}
+
+function buildBillMessage(booking, guest, room, settings) {
+  const gstPercent = Number(settings.gst_percent || 0);
+  const gstAmount = Math.round((booking.total * gstPercent) / 100);
+  const grandTotal = booking.total + gstAmount;
+  const balance = Math.max(0, grandTotal - booking.paid_amount);
+  const lines = [
+    `${settings.hotel_name || "MANYAWAR HOTEL"} — Bill`,
+    "",
+    `Guest: ${guest ? guest.name : ""}`,
+    `Room: ${room ? room.number : ""}`,
+    `${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)}`,
+    booking.booking_ref ? `Ref: ${booking.booking_ref}` : null,
+    "",
+    `Room charges: ${currency(booking.subtotal ?? booking.total)}`,
+    booking.discount > 0 ? `Discount: - ${currency(booking.discount)}` : null,
+    booking.early_checkin_fee > 0 ? `Early check-in fee: ${currency(booking.early_checkin_fee)}` : null,
+    booking.late_checkout_fee > 0 ? `Late checkout fee: ${currency(booking.late_checkout_fee)}` : null,
+    gstPercent > 0 ? `GST (${gstPercent}%): ${currency(gstAmount)}` : null,
+    `Total: ${currency(grandTotal)}`,
+    `Paid: ${currency(booking.paid_amount)}`,
+    `Balance: ${currency(balance)}`,
+    "",
+    "Thank you for staying with us!",
+  ].filter(Boolean);
+  return lines.join("\n");
 }
 
 function PaymentModal({ booking, onClose, onSave }) {
@@ -224,83 +235,6 @@ function DiscountModal({ booking, onClose, onSave }) {
       </div>
     </Modal>
   );
-}
-
-// ---------------------------------------------------------------
-// PROFORMA — quick, printable estimate (not a tax invoice). Two
-// simple templates, plus a direct browser-print option.
-// ---------------------------------------------------------------
-function ProformaModal({ booking, guest, room, settings, onClose }) {
-  const printIt = () => {
-    const html = buildProformaHtml(booking, guest, room, settings);
-    const w = window.open("", "_blank");
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    setTimeout(() => w.print(), 300);
-  };
-
-  const balance = Math.max(0, booking.total - booking.paid_amount);
-  const waMessage = `${settings.hotel_name || "MANYAWAR HOTEL"} — Proforma\n\nGuest: ${guest ? guest.name : ""}\nRoom: ${room ? room.number : ""}\n${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)}\n\nTotal: ${currency(booking.total)}\nPaid: ${currency(booking.paid_amount)}\nBalance: ${currency(balance)}\n\nThank you for staying with us!`;
-
-  return (
-    <Modal title="Proforma" onClose={onClose} width={420}>
-      <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
-        A quick printable estimate/receipt — not the formal GST tax invoice (use "Tax Invoice PDF" for that).
-      </p>
-      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-        <Button variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-        <Button variant="ghost" onClick={printIt}>
-          🖨 Print
-        </Button>
-        {guest?.phone && (
-          <a className="btn" href={whatsappLink(guest.phone, waMessage)} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-            Send via WhatsApp
-          </a>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
-function buildProformaHtml(booking, guest, room, settings) {
-  const rows = [
-    ["Room charges", currency(booking.subtotal ?? booking.total)],
-    ...(booking.discount > 0 ? [["Discount", `- ${currency(booking.discount)}`]] : []),
-    ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", currency(booking.early_checkin_fee)]] : []),
-    ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", currency(booking.late_checkout_fee)]] : []),
-    ["Total", currency(booking.total)],
-    ["Paid", currency(booking.paid_amount)],
-    ["Balance", currency(Math.max(0, booking.total - booking.paid_amount))],
-  ];
-  const rowsHtml = rows.map(([k, v]) => `<tr><td style="padding:6px 0;">${k}</td><td style="padding:6px 0;text-align:right;">${v}</td></tr>`).join("");
-  const accent = "#16233A";
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Proforma</title>
-    <style>
-      body { font-family: Georgia, serif; padding: 32px; color: #222; max-width: 480px; margin: 0 auto; }
-      h1 { color: ${accent}; font-size: 22px; margin-bottom: 0; }
-      .sub { color: #666; font-size: 13px; margin-top: 4px; }
-      table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
-      tr:last-child td { border-top: 2px solid ${accent}; font-weight: bold; padding-top: 10px; }
-      .box { border: 1px solid #ccc; border-radius: 6px; padding: 12px; margin-top: 16px; font-size: 13px; }
-      .footer { margin-top: 40px; font-size: 11px; color: #888; text-align: center; }
-    </style>
-  </head><body>
-    <h1>${settings.hotel_name || "MANYAWAR HOTEL"}</h1>
-    <div class="sub">${settings.address || ""} ${settings.phone ? "· " + settings.phone : ""}</div>
-    <div class="sub" style="margin-top:16px; font-weight:bold;">PROFORMA (estimate)</div>
-    <div class="box">
-      <strong>${guest ? guest.name : "Guest"}</strong><br/>
-      ${guest?.phone || ""}<br/>
-      Room ${room ? room.number : "—"} (${room ? room.type : ""})<br/>
-      ${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)} · ${booking.nights} nights
-      ${booking.booking_ref ? `<br/>Ref: ${booking.booking_ref}` : ""}
-    </div>
-    <table>${rowsHtml}</table>
-    <div class="footer">This is a proforma estimate, not a tax invoice. Generated ${fmtDate(todayISO())}.</div>
-  </body></html>`;
 }
 
 // ---------------------------------------------------------------

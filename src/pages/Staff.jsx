@@ -6,46 +6,82 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
   const [modal, setModal] = useState(null);
   const [taskFor, setTaskFor] = useState(null);
   const [attendanceModal, setAttendanceModal] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const saveStaff = async (form) => {
-    if (form.id) {
-      const { id, ...patch } = form;
-      await updateStaff(id, patch);
-    } else {
-      await addStaff(form);
+    setSaving(true);
+    try {
+      let result;
+      if (form.id) {
+        const { id, ...patch } = form;
+        result = await updateStaff(id, patch);
+      } else {
+        result = await addStaff(form);
+      }
+      if (result?.error) throw result.error;
+      setModal(null);
+      reload();
+    } catch (err) {
+      alert(`Couldn't save this staff member.\n\n${err?.message || "Please check your connection and try again."}`);
+    } finally {
+      setSaving(false);
     }
-    setModal(null);
-    reload();
   };
 
   const removeStaff = async (s) => {
     if (!confirm(`Remove ${s.name}?`)) return;
-    await deleteStaff(s.id);
+    const { error } = await deleteStaff(s.id);
+    if (error) return alert(`Couldn't remove ${s.name}: ${error.message}`);
     reload();
   };
 
   const addNewTask = async (staffId, roomId, task) => {
-    await addTask({ staff_id: staffId, room_id: roomId, task, done: false });
     const assignedStaff = staff.find((s) => s.id === staffId);
     const room = rooms.find((r) => r.id === roomId);
-    if (assignedStaff?.phone) {
-      window.open(
-        whatsappLink(assignedStaff.phone, `Hi ${assignedStaff.name}, you've been assigned: "${task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`),
-        "_blank"
+    // Open the WhatsApp tab FIRST (synchronously, tied to this click) so the
+    // browser doesn't block it as a popup once we `await` the save below.
+    const waWindow = assignedStaff?.phone ? window.open("", "_blank") : null;
+
+    const { error } = await addTask({ staff_id: staffId, room_id: roomId, task, done: false });
+    if (error) {
+      if (waWindow) waWindow.close();
+      alert(`Couldn't assign this task: ${error.message}`);
+      return;
+    }
+    if (waWindow) {
+      waWindow.location.href = whatsappLink(
+        assignedStaff.phone,
+        `Hi ${assignedStaff.name}, you've been assigned: "${task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`
       );
     }
     reload();
   };
+
   const toggleTask = async (task) => {
-    await updateTask(task.id, { done: !task.done });
+    const { error } = await updateTask(task.id, { done: !task.done });
+    if (error) return alert(`Couldn't update this task: ${error.message}`);
     reload();
   };
   const removeTask = async (task) => {
-    await deleteTask(task.id);
+    const { error } = await deleteTask(task.id);
+    if (error) return alert(`Couldn't remove this task: ${error.message}`);
     reload();
   };
-  const claimTask = async (task, staffId) => {
-    await updateTask(task.id, { staff_id: staffId });
+  const claimTask = async (task, staffId, room) => {
+    const assignedStaff = staff.find((s) => s.id === staffId);
+    const waWindow = assignedStaff?.phone ? window.open("", "_blank") : null;
+    const { error } = await updateTask(task.id, { staff_id: staffId });
+    if (error) {
+      if (waWindow) waWindow.close();
+      alert(`Couldn't assign this task: ${error.message}`);
+      return;
+    }
+    if (waWindow) {
+      waWindow.location.href = whatsappLink(
+        assignedStaff.phone,
+        `Hi ${assignedStaff.name}, you've been assigned: "${task.task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`
+      );
+    }
     reload();
   };
 
@@ -53,7 +89,10 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
     const rows = Object.entries(records)
       .filter(([, status]) => status)
       .map(([staffId, status]) => ({ staff_id: staffId, date, status }));
-    if (rows.length > 0) await upsertAttendance(rows);
+    if (rows.length > 0) {
+      const { error } = await upsertAttendance(rows);
+      if (error) return alert(`Couldn't save attendance: ${error.message}`);
+    }
     setAttendanceModal(false);
     reload();
   };
@@ -99,14 +138,8 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
                     defaultValue=""
                     onChange={(e) => {
                       if (!e.target.value) return;
-                      claimTask(t, e.target.value);
-                      const assignedStaff = staff.find((s) => s.id === e.target.value);
-                      if (assignedStaff?.phone) {
-                        window.open(
-                          whatsappLink(assignedStaff.phone, `Hi ${assignedStaff.name}, you've been assigned: "${t.task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`),
-                          "_blank"
-                        );
-                      }
+                      claimTask(t, e.target.value, room);
+                      e.target.value = "";
                     }}
                   >
                     <option value="">Assign to…</option>
@@ -198,7 +231,7 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
           );
         })
       )}
-      {modal && <StaffModal member={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={saveStaff} />}
+      {modal && <StaffModal member={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={saveStaff} saving={saving} />}
       {attendanceModal && (
         <AttendanceModal staff={staff} attendance={attendance} onClose={() => setAttendanceModal(false)} onSave={saveAttendance} />
       )}
@@ -239,7 +272,7 @@ function TaskAdder({ rooms, onAdd }) {
   );
 }
 
-function StaffModal({ member, onClose, onSave }) {
+function StaffModal({ member, onClose, onSave, saving }) {
   const [form, setForm] = useState(member || { name: "", role: STAFF_ROLES[0], shift: "Morning", phone: "", email: "" });
   return (
     <Modal title={member ? "Edit staff member" : "Add staff member"} onClose={onClose}>
@@ -290,13 +323,14 @@ function StaffModal({ member, onClose, onSave }) {
           Cancel
         </Button>
         <Button
+          disabled={saving}
           onClick={() => {
             if (!form.name.trim()) return alert("Name is required.");
             if (!form.phone.trim()) return alert("WhatsApp/phone number is required.");
             onSave(form);
           }}
         >
-          Save
+          {saving ? "Saving…" : "Save"}
         </Button>
       </div>
     </Modal>

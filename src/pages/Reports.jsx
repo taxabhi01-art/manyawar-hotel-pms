@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import * as XLSX from "xlsx";
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
 import { SectionTitle, Field, Button, Modal, currency, todayISO } from "../components.jsx";
 
 export default function Reports({ rooms, guests, bookings, staff, attendance }) {
@@ -55,6 +55,25 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
       .sort((a, b) => b.bookings - a.bookings)
       .slice(0, 12);
   }, [rooms, bookings]);
+
+  // Where bookings come from — useful for deciding where to spend marketing effort.
+  const PIE_COLORS = ["#16233A", "#B8863F", "#5F8863", "#A6452F", "#6b7a99"];
+  const sourceBreakdown = useMemo(() => {
+    const counts = {};
+    bookings.forEach((b) => {
+      const src = b.source || "Walk-in";
+      counts[src] = (counts[src] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [bookings]);
+
+  const statusBreakdown = useMemo(() => {
+    const counts = {};
+    bookings.forEach((b) => {
+      counts[b.status] = (counts[b.status] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [bookings]);
 
 
   return (
@@ -146,6 +165,46 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
             </BarChart>
           </ResponsiveContainer>
         )}
+      </div>
+
+      <SectionTitle eyebrow="Analytics" title="Bookings by source & status" />
+      <div className="grid-2" style={{ marginBottom: 30, gap: 16 }}>
+        <div className="stat-card">
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink70)", marginBottom: 8 }}>By source</div>
+          {sourceBreakdown.length === 0 ? (
+            <p style={{ fontSize: 13, color: "var(--ink45)", margin: 0 }}>No bookings yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={sourceBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={45} outerRadius={80} paddingAngle={2}>
+                  {sourceBreakdown.map((entry, i) => (
+                    <Cell key={entry.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+        <div className="stat-card">
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink70)", marginBottom: 8 }}>By status</div>
+          {statusBreakdown.length === 0 ? (
+            <p style={{ fontSize: 13, color: "var(--ink45)", margin: 0 }}>No bookings yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={statusBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={45} outerRadius={80} paddingAngle={2}>
+                  {statusBreakdown.map((entry, i) => (
+                    <Cell key={entry.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
       </div>
 
       {exportOpen && (

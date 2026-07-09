@@ -203,11 +203,27 @@ function hourNow() {
   const now = new Date();
   return now.getHours() + now.getMinutes() / 60;
 }
-export function isEarlyCheckinNow() {
+// Early check-in only counts if this is happening ON the booking's scheduled
+// check-in date AND more than 2 hours before the 12:00 PM standard time.
+export function isEarlyCheckin(booking) {
+  if (!booking || booking.check_in !== todayISO()) return false;
   return hourNow() < CHECKIN_HOUR - EARLY_CHECKIN_GRACE_HOURS;
 }
-export function isLateCheckoutNow() {
+// Late checkout only counts if this is happening ON the booking's scheduled
+// check-out date AND more than 1 hour after the 11:00 AM standard time.
+export function isLateCheckout(booking) {
+  if (!booking || booking.check_out !== todayISO()) return false;
   return hourNow() >= CHECKOUT_HOUR + LATE_CHECKOUT_GRACE_HOURS;
+}
+
+// Opens a blank tab immediately (synchronously, tied to the click) and fills
+// in the WhatsApp URL afterward — avoids popup blockers, which kick in when
+// window.open() is called after an `await` (e.g. a database save).
+export function openWhatsApp(phone, message) {
+  if (!phone) return null;
+  const win = window.open("", "_blank");
+  if (win) win.location.href = whatsappLink(phone, message);
+  return win;
 }
 
 // Recomputes a booking's total from its parts — call this any time subtotal,

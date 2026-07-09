@@ -15,8 +15,8 @@ import {
   isRoomAvailableForDates,
   computeRoomRate,
   computeBookingTotal,
-  isEarlyCheckinNow,
-  isLateCheckoutNow,
+  isEarlyCheckin,
+  isLateCheckout,
   whatsappLink,
   BOOKING_SOURCES,
   BOOKING_STATUS_COLORS,
@@ -601,7 +601,7 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
     }))
   );
   const [saving, setSaving] = useState(false);
-  const early = isEarlyCheckinNow();
+  const early = isEarlyCheckin(booking);
   const [earlyFee, setEarlyFee] = useState(0);
 
   useEffect(() => {
@@ -745,7 +745,7 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
 // ---------------------------------------------------------------
 export function CheckOutModal({ booking, onClose, onConfirm }) {
   const balance = booking.total - booking.paid_amount;
-  const late = isLateCheckoutNow();
+  const late = isLateCheckout(booking);
   const [lateFee, setLateFee] = useState(0);
 
   return (

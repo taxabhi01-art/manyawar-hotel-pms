@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES } from "../components.jsx";
-import { addExpense, updateExpense, deleteExpense } from "../lib/api.js";
+import { addExpense, updateExpense, deleteExpense, addStaff } from "../lib/api.js";
 
 export default function Finance({ bookings, expenses, staff, reload }) {
   const [expenseModal, setExpenseModal] = useState(null);
@@ -15,18 +15,16 @@ export default function Finance({ bookings, expenses, staff, reload }) {
   }, [bookings]);
 
   const saveExpense = async (form) => {
-    if (form.id) {
-      const { id, ...patch } = form;
-      await updateExpense(id, patch);
-    } else {
-      await addExpense(form);
-    }
+    const { id, ...patch } = form;
+    const { error } = id ? await updateExpense(id, patch) : await addExpense(patch);
+    if (error) return alert(`Couldn't save this expense: ${error.message}`);
     setExpenseModal(null);
     reload();
   };
   const removeExpense = async (e) => {
     if (!confirm("Delete this expense?")) return;
-    await deleteExpense(e.id);
+    const { error } = await deleteExpense(e.id);
+    if (error) return alert(`Couldn't delete this expense: ${error.message}`);
     reload();
   };
 
@@ -203,7 +201,25 @@ function ExpenseModal({ expense, staff, onClose, onSave }) {
   const [form, setForm] = useState(
     expense || { category: EXPENSE_CATEGORIES[0], amount: 0, description: "", expense_date: todayISO(), staff_id: "", salary_period: "" }
   );
+  const [addingStaff, setAddingStaff] = useState(false);
+  const [newStaffName, setNewStaffName] = useState("");
+  const [newStaffPhone, setNewStaffPhone] = useState("");
+  const [creatingStaff, setCreatingStaff] = useState(false);
   const isSalary = form.category === "Salaries";
+
+  const createStaffInline = async () => {
+    if (!newStaffName.trim()) return alert("Enter the staff member's name.");
+    if (!newStaffPhone.trim()) return alert("Enter their WhatsApp/phone number.");
+    setCreatingStaff(true);
+    const { data, error } = await addStaff({ name: newStaffName.trim(), phone: newStaffPhone.trim(), role: "Front Desk", shift: "Morning" });
+    setCreatingStaff(false);
+    if (error) return alert(`Couldn't add staff member: ${error.message}`);
+    setForm({ ...form, staff_id: data.id });
+    setAddingStaff(false);
+    setNewStaffName("");
+    setNewStaffPhone("");
+  };
+
   return (
     <Modal title={expense ? "Edit expense" : "Add expense"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -217,14 +233,37 @@ function ExpenseModal({ expense, staff, onClose, onSave }) {
         {isSalary && (
           <div className="grid-2">
             <Field label="Staff member">
-              <select className="input" value={form.staff_id || ""} onChange={(e) => setForm({ ...form, staff_id: e.target.value })}>
-                <option value="">Select staff…</option>
-                {staff.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+              {addingStaff ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <input className="input" placeholder="Name" value={newStaffName} onChange={(e) => setNewStaffName(e.target.value)} />
+                  <input className="input" placeholder="WhatsApp/phone" value={newStaffPhone} onChange={(e) => setNewStaffPhone(e.target.value)} />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Button variant="ghost" onClick={() => setAddingStaff(false)}>
+                      Cancel
+                    </Button>
+                    <Button disabled={creatingStaff} onClick={createStaffInline}>
+                      {creatingStaff ? "Adding…" : "Add staff"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <select
+                  className="input"
+                  value={form.staff_id || ""}
+                  onChange={(e) => {
+                    if (e.target.value === "__new__") setAddingStaff(true);
+                    else setForm({ ...form, staff_id: e.target.value });
+                  }}
+                >
+                  <option value="">Select staff…</option>
+                  {staff.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                  <option value="__new__">+ Add new staff…</option>
+                </select>
+              )}
             </Field>
             <Field label="Salary period">
               <input

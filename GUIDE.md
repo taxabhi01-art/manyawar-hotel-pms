@@ -254,3 +254,21 @@ Supabase → SQL Editor → `supabase-schema-v7.sql` Run karo.
 **8. Proforma simplify** — Proforma se PDF-download aur template-choice hata diya, ab sirf **"Print"** (seedha browser se print) aur **"Send via WhatsApp"** (text summary) hai. Tax Invoice PDF (GST wala) waisa hi hai, alag button.
 
 **10. Check-in/check-out time dikhta hai** — Bookings list mein har booking pe agar check-in/checkout ho chuka hai, uska **exact time** dikhega ("In: 08 Jul, 2:30 PM · Out: 09 Jul, 11:15 AM" jaisa).
+
+## UPDATE 8: Bug fixes + Proforma hataya + salary quick-add + round charts
+
+**Koi naya SQL nahi lagta** — sirf code files replace karo.
+
+### Fixes:
+
+**1. Early/Late fee ka logic sahi kiya** — Pehle sirf time check hota tha (koi bhi din agar 10 AM se pehle check-in dabao to "early" dikha deta tha, chahe booking ki date kuch bhi ho). Ab **date bhi check hota hai**: Early check-in sirf tab lagega jab check-in **booking ki asli check-in date par** ho AND 12 PM se 2+ ghante pehle ho. Late checkout sirf tab jab checkout **booking ki checkout date par** ho AND 11 AM se 1+ ghanta baad ho.
+
+**2. Staff add/save aur task-assign ka bug fix** — Iski wajah ye thi: jab task assign hota tha, code pehle database mein save karta tha (thoda time lagta hai), **uske baad** WhatsApp kholta tha — kai browsers is delay ki wajah se WhatsApp ko "popup" samajh kar **block** kar dete the, aur us error ki wajah se poora save process beech mein ruk jata tha (task list refresh hi nahi hoti thi, lagta tha kuch save hi nahi hua). Ab WhatsApp tab **turant** (click hote hi) khulta hai, database save hone ka wait nahi karta — koi popup-block nahi hoga. Saath hi, agar kabhi bhi staff save/task assign fail ho, ab ek **clear error message** dikhega (pehle chup-chap fail ho jata tha).
+
+**3. Proforma pura hata diya** — Proforma ka Print/WhatsApp dono hata diye. Ab Billing mein **"Send bill via WhatsApp"** button hai — ye asli bill ki details (GST, discount, fees sab) WhatsApp pe bhej deta hai text mein. "Tax Invoice PDF" wahi purana GST invoice hai.
+
+**4. Finance mein salary dete waqt naya staff add karo** — "Salaries" category choose karo, Staff dropdown mein **"+ Add new staff…"** option hai — wahi se naya staff member (naam + WhatsApp number) turant add kar sakte ho, expense save karte hi wo staff list mein bhi aa jayega.
+
+**5. Reports mein round (pie) charts** — "Bookings by source" aur "Bookings by status" — dono donut-chart ke roop mein, kaunse channel se zyada booking aa rahi hai turant dikh jayega.
+
+**6. Night Audit ab sirf Owner ko dikhega** — pehle sab staff ko dikhta tha, ab sirf owner login ko (Finance/Reports/Settings ki tarah).

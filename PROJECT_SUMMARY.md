@@ -57,10 +57,11 @@ hosting (Vercel), real staff logins. Ye ab **production mein live hai** aur roz 
     se seedha trigger ho sakte hain
   - Same-day checkout allowed (day-use bookings)
   - Cancel booking (status change, record delete nahi hota) — "no-show" status bhi hai (Night Audit se)
-- **Night Audit tab** (sab dekh sakte hain) — end-of-day summary: arrivals/departures done vs expected,
+- **Night Audit tab** (owner only) — end-of-day summary: arrivals/departures done vs expected,
   no-show detection + marking, occupancy/revenue snapshot, "Run audit" se history save hoti hai
-- **Staff** — ab WhatsApp number (phone) primary/required field hai, email optional (sirf app-login ke
-  liye). Task assign karte hi WhatsApp automatically khulta hai pre-filled message ke saath
+- **Staff** — WhatsApp number (phone) primary/required field hai, email optional (sirf app-login ke
+  liye). Task assign karte hi WhatsApp automatically khulta hai — popup-blocker-safe (tab pehle khulta
+  hai, phir database save hota hai, taaki browser block na kare)
 - **Guests** — directory, VIP tag, repeat-guest badge, search, ID-proof view button
 - **Billing** — payments (mode: Cash/UPI/Bank/Card/Other), discount, **PDF invoice generation**
   (GST ke saath, modern navy/brass design)

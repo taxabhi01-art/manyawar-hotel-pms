@@ -37,9 +37,9 @@ const BASE_NAV = [
   { id: "guests", label: "Guests" },
   { id: "billing", label: "Billing" },
   { id: "staff", label: "Staff" },
-  { id: "nightaudit", label: "Night Audit" },
 ];
 const OWNER_NAV = [
+  { id: "nightaudit", label: "Night Audit" },
   { id: "finance", label: "Finance" },
   { id: "reports", label: "Reports" },
   { id: "settings", label: "Settings" },
@@ -287,7 +287,7 @@ export default function App() {
             {tab === "staff" && (
               <Staff staff={data.staff} rooms={data.rooms} tasks={data.tasks} attendance={data.attendance} reload={reload} />
             )}
-            {tab === "nightaudit" && (
+            {tab === "nightaudit" && role === "owner" && (
               <NightAudit
                 rooms={data.rooms}
                 bookings={data.bookings}
