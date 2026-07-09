@@ -109,6 +109,15 @@ export async function updateExpense(id, patch) {
 export async function deleteExpense(id) {
   return supabase.from("expenses").delete().eq("id", id);
 }
+
+// ---------- NIGHT AUDIT ----------
+export async function listNightAudits() {
+  return supabase.from("night_audits").select("*").order("audit_date", { ascending: false });
+}
+export async function upsertNightAudit(record) {
+  return supabase.from("night_audits").upsert(record, { onConflict: "audit_date" });
+}
+
 export async function listCoGuests() {
   return supabase.from("co_guests").select("*");
 }

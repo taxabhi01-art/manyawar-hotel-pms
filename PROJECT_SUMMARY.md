@@ -55,6 +55,12 @@ hosting (Vercel), real staff logins. Ye ab **production mein live hai** aur roz 
   - Date-range filter (check-in date se) aur manual "Booking ID/reference" field jo invoice pe dikhta hai
   - Check-in/check-out modals ab App.jsx level pe hain — Dashboard ke "Arriving/Departing today" cards
     se seedha trigger ho sakte hain
+  - Same-day checkout allowed (day-use bookings)
+  - Cancel booking (status change, record delete nahi hota) — "no-show" status bhi hai (Night Audit se)
+- **Night Audit tab** (sab dekh sakte hain) — end-of-day summary: arrivals/departures done vs expected,
+  no-show detection + marking, occupancy/revenue snapshot, "Run audit" se history save hoti hai
+- **Staff** — ab WhatsApp number (phone) primary/required field hai, email optional (sirf app-login ke
+  liye). Task assign karte hi WhatsApp automatically khulta hai pre-filled message ke saath
 - **Guests** — directory, VIP tag, repeat-guest badge, search, ID-proof view button
 - **Billing** — payments (mode: Cash/UPI/Bank/Card/Other), discount, **PDF invoice generation**
   (GST ke saath, modern navy/brass design)
@@ -99,6 +105,8 @@ Migrations is order mein chalayi gayi hain (sab already run ho chuki hain live p
    `id_proof_back_path` on `guests` and `co_guests`
 6. `supabase-schema-v6.sql` — `bookings.checked_in_at`/`checked_out_at`, early check-in and late
    checkout flags + fees, `bookings.booking_ref` (manual booking ID shown on invoices)
+7. `supabase-schema-v7.sql` — salary expense fields (`expenses.staff_id`, `expenses.salary_period`),
+   `night_audits` table, `bookings.cancel_reason`
 
 Agar future mein koi naya SQL change ho, isi pattern mein `supabase-schema-v5.sql` banega —
 additive rehta hai (purana kabhi nahi todta), `create table if not exists` /
@@ -138,7 +146,8 @@ manyawar-pms/
         ├── Guests.jsx
         ├── Billing.jsx          ← payments, tax invoice + proforma PDFs, print, deposit adjust
         ├── Staff.jsx            ← tasks + attendance + WhatsApp task assign
-        ├── Finance.jsx          ← owner-only: income, expenses, cash flow
+        ├── Finance.jsx          ← owner-only: income, expenses (with salary tracking), cash flow
+        ├── NightAudit.jsx       ← end-of-day summary, no-show marking, audit history
         ├── Reports.jsx          ← owner-only revenue + Excel export + charts
         └── Settings.jsx         ← owner-only GST/hotel settings
 ```

@@ -227,3 +227,30 @@ Supabase → SQL Editor → `supabase-schema-v6.sql` Run karo.
 
 ### Zaroori baat
 Early/late fee detection aapke device/computer ki **local time** se hoti hai — isliye device ka time-zone aur ghadi sahi honi chahiye (India Standard Time). Fee amount har baar manually daalna hota hai — system khud koi fixed amount नहीं lagata, aap decide karte ho har case mein.
+
+## UPDATE 7: Cancel (not delete), Night Audit, salary tracking, WhatsApp-first staff
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v7.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye/badle features:
+
+**1. WhatsApp confirm** — WhatsApp feature pehle (v6) mein hi add ho chuka tha: booking confirmation, billing reminder, staff task assign — sab jagah hai. Agar nahi dikh raha tha, ho sakta hai wo update deploy nahi hui thi — is baar poori tarah confirm ho jayega.
+
+**2. Staff ab WhatsApp number se add hote hain** — Staff add karte waqt ab **naam + WhatsApp number** zaroori hai (email optional, sirf app-login ke liye chahiye). Jab bhi kisi staff ko koi task assign karo (seedha unke card se ya "Housekeeping queue" se), **WhatsApp apne aap khul jata hai** pre-filled message ke saath — bas "Send" dabana hai.
+
+**3. Same-day checkout** — ab check-in aur check-out **same date** ho sakti hai (day-use booking ke liye), pehle minimum 1 din force hota tha.
+
+**4. Check-in/check-out time automatic** — jab bhi "Confirm check-in" ya "Confirm check-out" dabate ho, us waqt ka exact time (date + time) database mein save ho jata hai apne aap.
+
+**5. Finance mein Salary tracking** — Expense category "Salaries" choose karoge to 2 naye fields aayenge: **kaunsa staff member** aur **kis period ki salary** (jaise "July 2026"). Expense list mein ye dikhega bhi.
+
+**6. Delete hata diya, Cancel add kiya** — Booking pe ab "✕ delete" nahi hai — **"Cancel booking"** button hai jo record ko database se **hataata nahi**, sirf "Cancelled" status de deta hai (reason ke saath). History/reporting ke liye poora record surakshit rehta hai. Filter mein "cancelled" aur "no-show" bhi add kiye hain.
+
+**7. Night Audit (naya tab, sabko dikhega)** — Din ke end mein: aaj kitne arrival/departure hone the vs hue, **possible no-shows** (jo aana tha but nahi aaye) ki list with "Mark no-show" button, occupancy/revenue summary, aur **"Run night audit"** button jo us din ka poora snapshot save kar deta hai (history ke liye). Ye front-desk ka roz ka closing process hai.
+
+**8. Proforma simplify** — Proforma se PDF-download aur template-choice hata diya, ab sirf **"Print"** (seedha browser se print) aur **"Send via WhatsApp"** (text summary) hai. Tax Invoice PDF (GST wala) waisa hi hai, alag button.
+
+**10. Check-in/check-out time dikhta hai** — Bookings list mein har booking pe agar check-in/checkout ho chuka hai, uska **exact time** dikhega ("In: 08 Jul, 2:30 PM · Out: 09 Jul, 11:15 AM" jaisa).

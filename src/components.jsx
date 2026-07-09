@@ -75,6 +75,20 @@ export function fmtDate(iso) {
   return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 }
 
+export function fmtDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+export const BOOKING_STATUS_COLORS = {
+  reserved: "#c99a3c",
+  "checked-in": "#5f8863",
+  "checked-out": "#46536b",
+  cancelled: "#a6452f",
+  "no-show": "#8a4a6b",
+};
+
 export function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }

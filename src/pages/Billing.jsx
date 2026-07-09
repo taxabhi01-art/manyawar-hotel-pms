@@ -231,10 +231,8 @@ function DiscountModal({ booking, onClose, onSave }) {
 // simple templates, plus a direct browser-print option.
 // ---------------------------------------------------------------
 function ProformaModal({ booking, guest, room, settings, onClose }) {
-  const [template, setTemplate] = useState(1);
-
   const printIt = () => {
-    const html = buildProformaHtml(booking, guest, room, settings, template);
+    const html = buildProformaHtml(booking, guest, room, settings);
     const w = window.open("", "_blank");
     w.document.write(html);
     w.document.close();
@@ -242,40 +240,32 @@ function ProformaModal({ booking, guest, room, settings, onClose }) {
     setTimeout(() => w.print(), 300);
   };
 
-  const downloadPdf = () => {
-    if (template === 1) generateProformaPdfClassic(booking, guest, room, settings);
-    else generateProformaPdfSimple(booking, guest, room, settings);
-  };
+  const balance = Math.max(0, booking.total - booking.paid_amount);
+  const waMessage = `${settings.hotel_name || "MANYAWAR HOTEL"} — Proforma\n\nGuest: ${guest ? guest.name : ""}\nRoom: ${room ? room.number : ""}\n${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)}\n\nTotal: ${currency(booking.total)}\nPaid: ${currency(booking.paid_amount)}\nBalance: ${currency(balance)}\n\nThank you for staying with us!`;
 
   return (
-    <Modal title="Proforma invoice" onClose={onClose} width={420}>
+    <Modal title="Proforma" onClose={onClose} width={420}>
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
-        A proforma is a quick estimate/receipt — not the formal GST tax invoice (use "Tax Invoice PDF" for that).
+        A quick printable estimate/receipt — not the formal GST tax invoice (use "Tax Invoice PDF" for that).
       </p>
-      <Field label="Template">
-        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-          <Button variant={template === 1 ? "primary" : "ghost"} onClick={() => setTemplate(1)}>
-            Template 1 — Branded
-          </Button>
-          <Button variant={template === 2 ? "primary" : "ghost"} onClick={() => setTemplate(2)}>
-            Template 2 — Simple
-          </Button>
-        </div>
-      </Field>
-      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
         <Button variant="ghost" onClick={onClose}>
           Close
         </Button>
         <Button variant="ghost" onClick={printIt}>
           🖨 Print
         </Button>
-        <Button onClick={downloadPdf}>Download PDF</Button>
+        {guest?.phone && (
+          <a className="btn" href={whatsappLink(guest.phone, waMessage)} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+            Send via WhatsApp
+          </a>
+        )}
       </div>
     </Modal>
   );
 }
 
-function buildProformaHtml(booking, guest, room, settings, template) {
+function buildProformaHtml(booking, guest, room, settings) {
   const rows = [
     ["Room charges", currency(booking.subtotal ?? booking.total)],
     ...(booking.discount > 0 ? [["Discount", `- ${currency(booking.discount)}`]] : []),
@@ -286,7 +276,7 @@ function buildProformaHtml(booking, guest, room, settings, template) {
     ["Balance", currency(Math.max(0, booking.total - booking.paid_amount))],
   ];
   const rowsHtml = rows.map(([k, v]) => `<tr><td style="padding:6px 0;">${k}</td><td style="padding:6px 0;text-align:right;">${v}</td></tr>`).join("");
-  const accent = template === 1 ? "#16233A" : "#333";
+  const accent = "#16233A";
   return `<!doctype html><html><head><meta charset="utf-8"><title>Proforma</title>
     <style>
       body { font-family: Georgia, serif; padding: 32px; color: #222; max-width: 480px; margin: 0 auto; }
@@ -300,84 +290,17 @@ function buildProformaHtml(booking, guest, room, settings, template) {
   </head><body>
     <h1>${settings.hotel_name || "MANYAWAR HOTEL"}</h1>
     <div class="sub">${settings.address || ""} ${settings.phone ? "· " + settings.phone : ""}</div>
-    <div class="sub" style="margin-top:16px; font-weight:bold;">PROFORMA INVOICE (estimate)</div>
+    <div class="sub" style="margin-top:16px; font-weight:bold;">PROFORMA (estimate)</div>
     <div class="box">
       <strong>${guest ? guest.name : "Guest"}</strong><br/>
       ${guest?.phone || ""}<br/>
       Room ${room ? room.number : "—"} (${room ? room.type : ""})<br/>
       ${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)} · ${booking.nights} nights
+      ${booking.booking_ref ? `<br/>Ref: ${booking.booking_ref}` : ""}
     </div>
     <table>${rowsHtml}</table>
     <div class="footer">This is a proforma estimate, not a tax invoice. Generated ${fmtDate(todayISO())}.</div>
   </body></html>`;
-}
-
-function generateProformaPdfClassic(booking, guest, room, settings) {
-  const doc = new jsPDF();
-  doc.setFillColor(22, 35, 58);
-  doc.rect(0, 0, 210, 30, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(17);
-  doc.text(settings.hotel_name || "MANYAWAR HOTEL", 14, 16);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text("PROFORMA INVOICE (estimate)", 14, 24);
-
-  doc.setTextColor(20, 20, 20);
-  doc.setFontSize(11);
-  doc.text(guest ? guest.name : "Guest", 14, 42);
-  doc.setFontSize(9);
-  doc.text(`Room ${room ? room.number : "—"} · ${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)}`, 14, 48);
-
-  autoTable(doc, {
-    startY: 58,
-    head: [["Description", "Amount"]],
-    body: [
-      ["Room charges", currency(booking.subtotal ?? booking.total).replace("₹", "Rs. ")],
-      ...(booking.discount > 0 ? [["Discount", `- Rs. ${booking.discount}`]] : []),
-      ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", `Rs. ${booking.early_checkin_fee}`]] : []),
-      ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", `Rs. ${booking.late_checkout_fee}`]] : []),
-      ["Total", `Rs. ${booking.total}`],
-      ["Paid", `Rs. ${booking.paid_amount}`],
-      ["Balance", `Rs. ${Math.max(0, booking.total - booking.paid_amount)}`],
-    ],
-    theme: "grid",
-    headStyles: { fillColor: [22, 35, 58] },
-    styles: { fontSize: 10 },
-  });
-
-  doc.save(`proforma_${(guest?.name || "guest").replace(/\s+/g, "_")}.pdf`);
-}
-
-function generateProformaPdfSimple(booking, guest, room, settings) {
-  const doc = new jsPDF();
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.text(settings.hotel_name || "MANYAWAR HOTEL", 14, 18);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text("Proforma Invoice (estimate)", 14, 25);
-  doc.text(`${guest ? guest.name : "Guest"} · Room ${room ? room.number : "—"}`, 14, 35);
-  doc.text(`${fmtDate(booking.check_in)} to ${fmtDate(booking.check_out)}`, 14, 41);
-
-  autoTable(doc, {
-    startY: 50,
-    head: [["Description", "Amount"]],
-    body: [
-      ["Room charges", `Rs. ${booking.subtotal ?? booking.total}`],
-      ...(booking.discount > 0 ? [["Discount", `- Rs. ${booking.discount}`]] : []),
-      ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", `Rs. ${booking.early_checkin_fee}`]] : []),
-      ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", `Rs. ${booking.late_checkout_fee}`]] : []),
-      ["Total", `Rs. ${booking.total}`],
-      ["Paid", `Rs. ${booking.paid_amount}`],
-      ["Balance", `Rs. ${Math.max(0, booking.total - booking.paid_amount)}`],
-    ],
-    theme: "striped",
-    styles: { fontSize: 10 },
-  });
-
-  doc.save(`proforma_simple_${(guest?.name || "guest").replace(/\s+/g, "_")}.pdf`);
 }
 
 // ---------------------------------------------------------------

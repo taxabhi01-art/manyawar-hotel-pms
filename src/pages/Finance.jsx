@@ -3,7 +3,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES } from "../components.jsx";
 import { addExpense, updateExpense, deleteExpense } from "../lib/api.js";
 
-export default function Finance({ bookings, expenses, reload }) {
+export default function Finance({ bookings, expenses, staff, reload }) {
   const [expenseModal, setExpenseModal] = useState(null);
   const [granularity, setGranularity] = useState("monthly"); // daily | monthly | yearly
   const [monthsBack, setMonthsBack] = useState(6);
@@ -157,35 +157,53 @@ export default function Finance({ bookings, expenses, reload }) {
       {recentExpenses.length === 0 ? (
         <EmptyState text="No expenses logged yet." action={<Button onClick={() => setExpenseModal("new")}>Add your first expense</Button>} />
       ) : (
-        recentExpenses.map((e) => (
-          <div className="card" key={e.id}>
-            <span style={{ fontSize: 12.5, color: "var(--ink45)", width: 90 }}>{fmtDate(e.expense_date)}</span>
-            <Pill color="#46536b">{e.category}</Pill>
-            <span style={{ flex: 1, fontSize: 13 }}>{e.description}</span>
-            <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--rust)" }}>{currency(e.amount)}</span>
-            <div style={{ display: "flex", gap: 6 }}>
-              <Button variant="ghost" onClick={() => setExpenseModal(e)}>
-                Edit
-              </Button>
-              <Button variant="danger" onClick={() => removeExpense(e)}>
-                Delete
-              </Button>
+        recentExpenses.map((e) => {
+          const paidStaff = staff.find((s) => s.id === e.staff_id);
+          return (
+            <div className="card" key={e.id}>
+              <span style={{ fontSize: 12.5, color: "var(--ink45)", width: 90 }}>{fmtDate(e.expense_date)}</span>
+              <Pill color="#46536b">{e.category}</Pill>
+              <span style={{ flex: 1, fontSize: 13 }}>
+                {e.description}
+                {paidStaff && (
+                  <span style={{ color: "var(--brass)", fontWeight: 600 }}>
+                    {" "}
+                    · {paidStaff.name}
+                    {e.salary_period ? ` (${e.salary_period})` : ""}
+                  </span>
+                )}
+              </span>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--rust)" }}>{currency(e.amount)}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Button variant="ghost" onClick={() => setExpenseModal(e)}>
+                  Edit
+                </Button>
+                <Button variant="danger" onClick={() => removeExpense(e)}>
+                  Delete
+                </Button>
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
 
       {expenseModal && (
-        <ExpenseModal expense={expenseModal === "new" ? null : expenseModal} onClose={() => setExpenseModal(null)} onSave={saveExpense} />
+        <ExpenseModal
+          expense={expenseModal === "new" ? null : expenseModal}
+          staff={staff}
+          onClose={() => setExpenseModal(null)}
+          onSave={saveExpense}
+        />
       )}
     </div>
   );
 }
 
-function ExpenseModal({ expense, onClose, onSave }) {
+function ExpenseModal({ expense, staff, onClose, onSave }) {
   const [form, setForm] = useState(
-    expense || { category: EXPENSE_CATEGORIES[0], amount: 0, description: "", expense_date: todayISO() }
+    expense || { category: EXPENSE_CATEGORIES[0], amount: 0, description: "", expense_date: todayISO(), staff_id: "", salary_period: "" }
   );
+  const isSalary = form.category === "Salaries";
   return (
     <Modal title={expense ? "Edit expense" : "Add expense"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -196,6 +214,28 @@ function ExpenseModal({ expense, onClose, onSave }) {
             ))}
           </select>
         </Field>
+        {isSalary && (
+          <div className="grid-2">
+            <Field label="Staff member">
+              <select className="input" value={form.staff_id || ""} onChange={(e) => setForm({ ...form, staff_id: e.target.value })}>
+                <option value="">Select staff…</option>
+                {staff.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Salary period">
+              <input
+                className="input"
+                value={form.salary_period || ""}
+                onChange={(e) => setForm({ ...form, salary_period: e.target.value })}
+                placeholder="e.g. July 2026"
+              />
+            </Field>
+          </div>
+        )}
         <Field label="Amount">
           <input className="input" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} />
         </Field>
@@ -213,7 +253,8 @@ function ExpenseModal({ expense, onClose, onSave }) {
         <Button
           onClick={() => {
             if (!form.amount || form.amount <= 0) return alert("Enter a valid amount.");
-            onSave(form);
+            if (isSalary && !form.staff_id) return alert("Select which staff member this salary is for.");
+            onSave({ ...form, staff_id: form.staff_id || null });
           }}
         >
           Save expense

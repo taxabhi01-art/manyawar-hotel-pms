@@ -26,6 +26,14 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
 
   const addNewTask = async (staffId, roomId, task) => {
     await addTask({ staff_id: staffId, room_id: roomId, task, done: false });
+    const assignedStaff = staff.find((s) => s.id === staffId);
+    const room = rooms.find((r) => r.id === roomId);
+    if (assignedStaff?.phone) {
+      window.open(
+        whatsappLink(assignedStaff.phone, `Hi ${assignedStaff.name}, you've been assigned: "${task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`),
+        "_blank"
+      );
+    }
     reload();
   };
   const toggleTask = async (task) => {
@@ -239,16 +247,12 @@ function StaffModal({ member, onClose, onSave }) {
         <Field label="Full name">
           <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </Field>
-        <Field label="Phone">
-          <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-        </Field>
-        <Field label="Login email (for task alerts)">
+        <Field label="WhatsApp / phone number">
           <input
             className="input"
-            type="email"
-            value={form.email || ""}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            placeholder="Must match their Supabase login email"
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            placeholder="10-digit number"
           />
         </Field>
         <Field label="Role">
@@ -266,6 +270,21 @@ function StaffModal({ member, onClose, onSave }) {
           </select>
         </Field>
       </div>
+      <div style={{ marginTop: 14 }}>
+        <Field label="Login email (optional — only if they need app access)">
+          <input
+            className="input"
+            type="email"
+            value={form.email || ""}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="Must match their Supabase login email"
+          />
+        </Field>
+        <p style={{ fontSize: 11.5, color: "var(--ink45)", marginTop: 6 }}>
+          Task assignments and updates are sent via WhatsApp to their number above — a login email is
+          only needed if this staff member should be able to open the app themselves.
+        </p>
+      </div>
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Button variant="ghost" onClick={onClose}>
           Cancel
@@ -273,6 +292,7 @@ function StaffModal({ member, onClose, onSave }) {
         <Button
           onClick={() => {
             if (!form.name.trim()) return alert("Name is required.");
+            if (!form.phone.trim()) return alert("WhatsApp/phone number is required.");
             onSave(form);
           }}
         >

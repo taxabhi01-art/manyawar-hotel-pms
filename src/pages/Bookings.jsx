@@ -9,6 +9,7 @@ import {
   IdCaptureField,
   currency,
   fmtDate,
+  fmtDateTime,
   nightsBetween,
   todayISO,
   isRoomAvailableForDates,
@@ -18,11 +19,12 @@ import {
   isLateCheckoutNow,
   whatsappLink,
   BOOKING_SOURCES,
+  BOOKING_STATUS_COLORS,
 } from "../components.jsx";
 import {
   addBooking,
   updateBooking,
-  deleteBooking,
+  updateRoom,
   addGuest,
   updateGuest,
   addCoGuest,
@@ -36,6 +38,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
   const [editModal, setEditModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
   const [confirmSendModal, setConfirmSendModal] = useState(null);
+  const [cancelModal, setCancelModal] = useState(null);
   const [filter, setFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -85,9 +88,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
     }
   };
 
-  const cancelBooking = async (b) => {
-    if (!confirm("Cancel this booking?")) return;
-    await deleteBooking(b.id);
+  const cancelBooking = async (b, reason) => {
+    await updateBooking(b.id, { status: "cancelled", cancel_reason: reason || null });
+    if (b.status === "checked-in") {
+      await updateRoom(b.room_id, { status: "available" });
+    }
     reload();
   };
   const saveDates = async (booking, { checkIn, checkOut }) => {
@@ -124,7 +129,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
         </p>
       )}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-        {["all", "reserved", "checked-in", "checked-out"].map((f) => (
+        {["all", "reserved", "checked-in", "checked-out", "cancelled", "no-show"].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -187,6 +192,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
               <span style={{ fontSize: 11.5, color: "var(--ink45)" }}>
                 {1 + (b.co_guests_count || 0)} guest{b.co_guests_count ? "s" : ""}
               </span>
+              {(b.checked_in_at || b.checked_out_at) && (
+                <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>
+                  {b.checked_in_at && <>In: {fmtDateTime(b.checked_in_at)} </>}
+                  {b.checked_out_at && <>· Out: {fmtDateTime(b.checked_out_at)}</>}
+                </div>
+              )}
               {b.deposit > 0 && (
                 <span style={{ fontSize: 11.5, color: (b.deposit_status || "held") === "held" ? "var(--brass)" : "var(--ink45)" }}>
                   Deposit {currency(b.deposit)} ({b.deposit_status || "held"})
@@ -202,12 +213,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
                   ⏰ Late checkout {b.late_checkout_fee > 0 ? `(+${currency(b.late_checkout_fee)})` : ""}
                 </span>
               )}
-              <Pill color={b.status === "reserved" ? "#c99a3c" : b.status === "checked-in" ? "#5f8863" : "#46536b"}>{b.status}</Pill>
+              <Pill color={BOOKING_STATUS_COLORS[b.status] || "#46536b"}>{b.status}</Pill>
               <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <Button variant="ghost" onClick={() => setDetailModal(b)}>
                   Guest details
                 </Button>
-                {b.status !== "checked-out" && (
+                {b.status !== "checked-out" && b.status !== "cancelled" && b.status !== "no-show" && (
                   <Button variant="ghost" onClick={() => setEditModal(b)}>
                     Edit dates
                   </Button>
@@ -218,9 +229,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
                     Check out
                   </Button>
                 )}
-                {b.status !== "checked-out" && (
-                  <Button variant="danger" onClick={() => cancelBooking(b)}>
-                    ✕
+                {(b.status === "reserved" || b.status === "checked-in") && (
+                  <Button variant="danger" onClick={() => setCancelModal(b)}>
+                    Cancel booking
                   </Button>
                 )}
               </div>
@@ -258,7 +269,50 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
       {confirmSendModal && (
         <WhatsAppConfirmModal info={confirmSendModal} onClose={() => setConfirmSendModal(null)} />
       )}
+      {cancelModal && (
+        <CancelBookingModal
+          booking={cancelModal}
+          guest={guestOf(cancelModal.guest_id)}
+          room={roomOf(cancelModal.room_id)}
+          onClose={() => setCancelModal(null)}
+          onConfirm={(reason) => {
+            cancelBooking(cancelModal, reason);
+            setCancelModal(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function CancelBookingModal({ booking, guest, room, onClose, onConfirm }) {
+  const [reason, setReason] = useState("");
+  return (
+    <Modal title="Cancel booking" onClose={onClose} width={420}>
+      <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rust)" }}>
+          {guest ? guest.name : "Guest"} — Room {room ? room.number : "—"}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--ink70)", marginTop: 2 }}>
+          {fmtDate(booking.check_in)} → {fmtDate(booking.check_out)} · {currency(booking.total)}
+        </div>
+      </div>
+      <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
+        This keeps the booking on record (marked "Cancelled") instead of deleting it — useful for
+        history and reporting.
+      </p>
+      <Field label="Reason (optional)">
+        <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Guest changed plans" />
+      </Field>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Keep booking
+        </Button>
+        <Button variant="danger" onClick={() => onConfirm(reason.trim())}>
+          Confirm cancellation
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -320,7 +374,7 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
   const previewRate = selectedRoom ? computeRoomRate(selectedRoom, occupancy) : 0;
 
   const submit = () => {
-    if (checkOut <= checkIn) return alert("Check-out must be after check-in.");
+    if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
     if (!roomId) return alert("No room is available for these dates. Try a different date range.");
     if (checkIn < todayISO()) {
       const proceed = confirm(
@@ -512,7 +566,7 @@ function EditDatesModal({ booking, bookings, onClose, onSave }) {
         <Button
           disabled={!available}
           onClick={() => {
-            if (checkOut <= checkIn) return alert("Check-out must be after check-in.");
+            if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
             onSave({ checkIn, checkOut });
           }}
         >
