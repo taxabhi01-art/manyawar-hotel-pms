@@ -27,22 +27,30 @@ body { margin: 0; font-family: var(--font-body); background: var(--parchment); c
   width: 220px; flex-shrink: 0; background: var(--ink); color: var(--parchment);
   display: flex; flex-direction: column; padding: 22px 14px; position: sticky; top: 0;
   height: 100vh; overflow-y: auto;
+  padding-top: calc(22px + env(safe-area-inset-top));
+  padding-left: calc(14px + env(safe-area-inset-left));
 }
-.sidebar h1 { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 19px; margin: 0; }
+.sidebar h1 { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 19px; margin: 0; white-space: nowrap; }
 .nav { margin-top: 28px; display: flex; flex-direction: column; gap: 3px; }
 .nav-btn {
   all: unset; cursor: pointer; display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: var(--parchment);
+  white-space: nowrap;
 }
 .nav-btn.active { color: var(--ink); background: var(--brass-soft); }
 .sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
 .sidebar-footer button {
   all: unset; cursor: pointer; font-size: 12.5px; font-weight: 600; color: rgba(246,241,231,0.75);
   padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(246,241,231,0.18);
+  white-space: nowrap;
 }
 .sidebar-footer .muted { font-size: 11px; color: rgba(246,241,231,0.4); line-height: 1.5; }
 
-.main { flex: 1; padding: 28px 32px; max-width: 1100px; margin: 0 auto; width: 100%; }
+.main {
+  flex: 1; padding: 28px 32px; max-width: 1100px; margin: 0 auto; width: 100%;
+  padding-right: calc(32px + env(safe-area-inset-right));
+  padding-bottom: calc(28px + env(safe-area-inset-bottom));
+}
 
 .section-title { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
 .section-title .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--brass); font-weight: 700; }
@@ -85,7 +93,7 @@ body { margin: 0; font-family: var(--font-body); background: var(--parchment); c
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
 
-.login-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--ink); padding: 20px; }
+.login-shell { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: var(--ink); padding: 20px; padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left)); }
 .login-card { background: var(--parchment); border-radius: 16px; padding: 32px 28px; width: 100%; max-width: 340px; box-shadow: 0 24px 60px rgba(0,0,0,0.35); }
 .login-card h2 { font-family: var(--font-display); font-size: 22px; text-align: center; margin: 0 0 4px; }
 .login-card p { font-size: 13px; color: var(--ink45); text-align: center; margin: 0 0 20px; }
@@ -96,5 +104,37 @@ body { margin: 0; font-family: var(--font-body); background: var(--parchment); c
 
 @media (max-width: 720px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
-  .main { padding: 20px; }
+
+  .app { flex-direction: column; min-height: 100dvh; }
+
+  .sidebar {
+    width: 100%; height: auto; position: sticky; top: 0; z-index: 40;
+    flex-direction: row; align-items: center; gap: 14px;
+    padding: calc(10px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-left)) 10px calc(14px + env(safe-area-inset-left));
+    overflow: visible;
+  }
+  .sidebar h1 { font-size: 15px; flex-shrink: 0; }
+  .nav {
+    margin-top: 0; flex-direction: row; gap: 2px; flex: 1;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-btn { padding: 7px 10px; font-size: 12.5px; }
+
+  .sidebar-footer {
+    margin-top: 0; flex-direction: row; flex-shrink: 0;
+  }
+  .sidebar-footer .muted { display: none; }
+  .sidebar-footer button { padding: 7px 10px; font-size: 11.5px; }
+
+  .main {
+    padding: 16px; padding-right: calc(16px + env(safe-area-inset-right));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .card { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .card > span, .card > div:not(.card-col) { width: auto !important; }
+  .card > div[style*="margin-left"] { margin-left: 0 !important; width: 100%; }
 }
+
