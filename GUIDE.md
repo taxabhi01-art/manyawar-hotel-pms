@@ -309,3 +309,24 @@ Supabase → SQL Editor → `supabase-schema-v9.sql` Run karo.
 **2. Night Audit mein early check-in / late checkout count** — us din kitne guests early aaye aur kitne late gaye, dono alag stat card mein dikhega, aur "Run night audit" karte waqt ye history mein bhi save ho jata hai.
 
 **3. Reports mein payment-mode chart** — ek naya round (pie) chart "Payments by mode" — Cash/UPI/Bank/Card ka poora breakdown, kitna paisa kaunse mode se aaya.
+
+## UPDATE 11: Activity log, global search, checklist, maintenance tickets, cash-flow range, full night-audit detail
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v10.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye features:
+
+**1. Activity log + owner notification** — koi bhi zaroori action (booking cancel, discount, deposit refund, staff remove, expense add, no-show mark, maintenance ticket) automatically log hota hai. Owner ko top pe ek **banner** dikhta hai "X naye activity log entries" — "View" ya "Mark as read" kar sakte ho. "Activity" naam ka naya tab (sirf owner) poora history dikhata hai (kisne kya kiya, kab).
+
+**2. Global search** — Sidebar mein top pe search box hai — guest naam, phone, room number, ya booking ref type karo, results turant dikhenge. Kisi bhi result pe click karo, **seedha us tab pe le jayega aur us cheez ko highlight kar dega** (2-3 second ke liye brass color se glow karega taaki turant dikh jaye).
+
+**3. Housekeeping checklist** — Staff tab mein task assign karte waqt ab standard checklist items (bedsheets, bathroom, vacuum, etc.) **one-click** se add kar sakte ho, ya **"Assign full checklist"** dabao to sab ek saath assign ho jayenge.
+
+**4. Maintenance tickets (naya tab, sabko dikhega)** — Cleaning se alag — "AC kharab hai" jaisi complaints report karo, priority set karo (Low/Medium/High/Urgent), staff ko assign karo (WhatsApp se automatic), status track karo (Open → In Progress → Resolved).
+
+**5. Finance cash-flow mein date range** — Ab "Today" fix nahi hai — From/To date daal sakte ho, ya "Today"/"Yesterday"/"Last 7 days"/"Last 30 days" quick-buttons use kar sakte ho, jo bhi period dekhna hai.
+
+**6. Night Audit ab poori tarah detailed hai** — Sirf counts nahi, ab poori list dikhti hai: sab arrivals/departures naam ke saath, early check-in/late checkout kisne kiye (fee ke saath), revenue payment-mode ke hisaab se, expenses category ke hisaab se. History mein bhi har purani date ke liye **"View details"** button hai jo us din ka poora record dikhata hai (jaisa audit run karte waqt tha).

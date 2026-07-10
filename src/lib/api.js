@@ -134,6 +134,33 @@ export async function deleteInventoryUsage(id) {
   return supabase.from("inventory_usage").delete().eq("id", id);
 }
 
+// ---------- ACTIVITY LOG (owner notifications) ----------
+export async function listActivityLog() {
+  return supabase.from("activity_log").select("*").order("created_at", { ascending: false }).limit(200);
+}
+export async function logActivity(action, details) {
+  let performedBy = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    performedBy = data?.user?.email || null;
+  } catch (e) {}
+  return supabase.from("activity_log").insert({ action, details, performed_by: performedBy });
+}
+
+// ---------- MAINTENANCE TICKETS ----------
+export async function listMaintenanceTickets() {
+  return supabase.from("maintenance_tickets").select("*").order("created_at", { ascending: false });
+}
+export async function addMaintenanceTicket(ticket) {
+  return supabase.from("maintenance_tickets").insert(ticket).select().single();
+}
+export async function updateMaintenanceTicket(id, patch) {
+  return supabase.from("maintenance_tickets").update(patch).eq("id", id);
+}
+export async function deleteMaintenanceTicket(id) {
+  return supabase.from("maintenance_tickets").delete().eq("id", id);
+}
+
 export async function listNightAudits() {
   return supabase.from("night_audits").select("*").order("audit_date", { ascending: false });
 }

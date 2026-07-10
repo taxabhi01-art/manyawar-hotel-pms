@@ -1,12 +1,15 @@
 import React, { useState, useMemo } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES } from "../components.jsx";
-import { addExpense, updateExpense, deleteExpense, addStaff } from "../lib/api.js";
+import { addExpense, updateExpense, deleteExpense, addStaff, logActivity } from "../lib/api.js";
 
 export default function Finance({ bookings, expenses, staff, reload }) {
   const [expenseModal, setExpenseModal] = useState(null);
   const [granularity, setGranularity] = useState("monthly"); // daily | monthly | yearly
   const [monthsBack, setMonthsBack] = useState(6);
+  const today = todayISO();
+  const [cfStart, setCfStart] = useState(today);
+  const [cfEnd, setCfEnd] = useState(today);
 
   const allPayments = useMemo(() => {
     const rows = [];
@@ -18,6 +21,7 @@ export default function Finance({ bookings, expenses, staff, reload }) {
     const { id, ...patch } = form;
     const { error } = id ? await updateExpense(id, patch) : await addExpense(patch);
     if (error) return alert(`Couldn't save this expense: ${error.message}`);
+    if (!id) logActivity("Expense added", `${patch.category} — ${currency(patch.amount)}${patch.description ? ` (${patch.description})` : ""}`);
     setExpenseModal(null);
     reload();
   };
@@ -28,28 +32,35 @@ export default function Finance({ bookings, expenses, staff, reload }) {
     reload();
   };
 
-  const today = todayISO();
   const thisMonthPrefix = today.slice(0, 7);
   const incomeThisMonth = allPayments.filter((p) => p.paid_on?.startsWith(thisMonthPrefix)).reduce((s, p) => s + p.amount, 0);
   const expenseThisMonth = expenses.filter((e) => e.expense_date?.startsWith(thisMonthPrefix)).reduce((s, e) => s + e.amount, 0);
   const netThisMonth = incomeThisMonth - expenseThisMonth;
 
-  // ---- Today's cash flow — by payment mode, expenses, net, and pending ----
-  const todaysPayments = useMemo(() => allPayments.filter((p) => p.paid_on === today), [allPayments, today]);
-  const byModeToday = useMemo(() => {
+  // ---- Cash flow for the selected date range — by payment mode, expenses, net, and pending ----
+  const cfPreset = (fromDaysAgo, toDaysAgo = 0) => {
+    setCfStart(new Date(Date.now() - fromDaysAgo * 86400000).toISOString().slice(0, 10));
+    setCfEnd(new Date(Date.now() - toDaysAgo * 86400000).toISOString().slice(0, 10));
+  };
+  const rangePayments = useMemo(
+    () => allPayments.filter((p) => p.paid_on >= cfStart && p.paid_on <= cfEnd),
+    [allPayments, cfStart, cfEnd]
+  );
+  const byModeRange = useMemo(() => {
     const map = {};
-    todaysPayments.forEach((p) => (map[p.mode] = (map[p.mode] || 0) + p.amount));
+    rangePayments.forEach((p) => (map[p.mode] = (map[p.mode] || 0) + p.amount));
     return map;
-  }, [todaysPayments]);
-  const cashToday = byModeToday["Cash"] || 0;
-  const upiToday = byModeToday["UPI"] || 0;
-  const otherModesToday = Object.entries(byModeToday)
+  }, [rangePayments]);
+  const cashInRange = byModeRange["Cash"] || 0;
+  const upiInRange = byModeRange["UPI"] || 0;
+  const otherModesInRange = Object.entries(byModeRange)
     .filter(([mode]) => mode !== "Cash" && mode !== "UPI")
     .reduce((s, [, amt]) => s + amt, 0);
-  const totalReceivedToday = cashToday + upiToday + otherModesToday;
-  const expensesToday = expenses.filter((e) => e.expense_date === today).reduce((s, e) => s + e.amount, 0);
-  const netToday = totalReceivedToday - expensesToday;
+  const totalReceivedInRange = cashInRange + upiInRange + otherModesInRange;
+  const expensesInRange = expenses.filter((e) => e.expense_date >= cfStart && e.expense_date <= cfEnd).reduce((s, e) => s + e.amount, 0);
+  const netInRange = totalReceivedInRange - expensesInRange;
   const totalPending = bookings.reduce((s, b) => s + Math.max(0, (b.total || 0) - (b.paid_amount || 0)), 0);
+
 
   // ---- Cash flow chart data ----
   const chartData = useMemo(() => {
@@ -94,31 +105,48 @@ export default function Finance({ bookings, expenses, staff, reload }) {
     <div>
       <SectionTitle eyebrow="Owner only" title="Finance" action={<Button onClick={() => setExpenseModal("new")}>+ Add expense</Button>} />
 
-      <SectionTitle eyebrow="Today" title={`Cash flow — ${fmtDate(today)}`} />
+      <SectionTitle
+        eyebrow="Cash flow"
+        title={`${fmtDate(cfStart)} → ${fmtDate(cfEnd)}`}
+        action={
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <Button variant="ghost" onClick={() => cfPreset(0, 0)}>Today</Button>
+            <Button variant="ghost" onClick={() => cfPreset(1, 1)}>Yesterday</Button>
+            <Button variant="ghost" onClick={() => cfPreset(6, 0)}>Last 7 days</Button>
+            <Button variant="ghost" onClick={() => cfPreset(29, 0)}>Last 30 days</Button>
+            <Field label="From">
+              <input className="input" type="date" style={{ width: 140 }} value={cfStart} onChange={(e) => setCfStart(e.target.value)} />
+            </Field>
+            <Field label="To">
+              <input className="input" type="date" style={{ width: 140 }} value={cfEnd} onChange={(e) => setCfEnd(e.target.value)} />
+            </Field>
+          </div>
+        }
+      />
       <div className="stat-grid" style={{ marginBottom: 30 }}>
         <div className="stat-card">
           <div className="label">Cash received</div>
-          <div className="value" style={{ color: "var(--sage)" }}>{currency(cashToday)}</div>
+          <div className="value" style={{ color: "var(--sage)" }}>{currency(cashInRange)}</div>
         </div>
         <div className="stat-card">
           <div className="label">UPI received</div>
-          <div className="value" style={{ color: "var(--sage)" }}>{currency(upiToday)}</div>
+          <div className="value" style={{ color: "var(--sage)" }}>{currency(upiInRange)}</div>
         </div>
         <div className="stat-card">
           <div className="label">Other (Bank/Card)</div>
-          <div className="value" style={{ color: "var(--sage)" }}>{currency(otherModesToday)}</div>
+          <div className="value" style={{ color: "var(--sage)" }}>{currency(otherModesInRange)}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Total received today</div>
-          <div className="value">{currency(totalReceivedToday)}</div>
+          <div className="label">Total received</div>
+          <div className="value">{currency(totalReceivedInRange)}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Expenses today</div>
-          <div className="value" style={{ color: "var(--rust)" }}>{currency(expensesToday)}</div>
+          <div className="label">Expenses</div>
+          <div className="value" style={{ color: "var(--rust)" }}>{currency(expensesInRange)}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Net today</div>
-          <div className="value" style={{ color: netToday >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netToday)}</div>
+          <div className="label">Net</div>
+          <div className="value" style={{ color: netInRange >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netInRange)}</div>
         </div>
         <div className="stat-card">
           <div className="label">Total pending (all bookings)</div>

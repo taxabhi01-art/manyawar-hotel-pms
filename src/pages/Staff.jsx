@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, todayISO, whatsappLink, STAFF_ROLES, ATTENDANCE_STATUS } from "../components.jsx";
-import { addStaff, updateStaff, deleteStaff, addTask, updateTask, deleteTask, upsertAttendance } from "../lib/api.js";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, todayISO, whatsappLink, HOUSEKEEPING_CHECKLIST, STAFF_ROLES, ATTENDANCE_STATUS } from "../components.jsx";
+import { addStaff, updateStaff, deleteStaff, addTask, updateTask, deleteTask, upsertAttendance, logActivity } from "../lib/api.js";
 
 export default function Staff({ staff, rooms, tasks, attendance, reload }) {
   const [modal, setModal] = useState(null);
@@ -32,6 +32,7 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
     if (!confirm(`Remove ${s.name}?`)) return;
     const { error } = await deleteStaff(s.id);
     if (error) return alert(`Couldn't remove ${s.name}: ${error.message}`);
+    logActivity("Staff removed", s.name);
     reload();
   };
 
@@ -243,31 +244,56 @@ function TaskAdder({ rooms, onAdd }) {
   const [roomId, setRoomId] = useState(rooms[0]?.id || "");
   const [task, setTask] = useState("");
   return (
-    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-      <select className="input" style={{ width: 120 }} value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-        {rooms.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.number}
-          </option>
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select className="input" style={{ width: 120 }} value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+          {rooms.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.number}
+            </option>
+          ))}
+        </select>
+        <input
+          className="input"
+          style={{ flex: 1, minWidth: 160 }}
+          placeholder="e.g. Deep clean bathroom"
+          value={task}
+          onChange={(e) => setTask(e.target.value)}
+        />
+        <Button
+          variant="ghost"
+          onClick={() => {
+            if (!task.trim() || !roomId) return;
+            onAdd(roomId, task.trim());
+            setTask("");
+          }}
+        >
+          Assign
+        </Button>
+      </div>
+      <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {HOUSEKEEPING_CHECKLIST.map((item) => (
+          <button
+            key={item}
+            onClick={() => roomId && onAdd(roomId, item)}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+              background: "transparent", color: "var(--ink70)", border: "1px solid var(--hairline)",
+            }}
+          >
+            + {item}
+          </button>
         ))}
-      </select>
-      <input
-        className="input"
-        style={{ flex: 1, minWidth: 160 }}
-        placeholder="e.g. Deep clean bathroom"
-        value={task}
-        onChange={(e) => setTask(e.target.value)}
-      />
-      <Button
-        variant="ghost"
-        onClick={() => {
-          if (!task.trim() || !roomId) return;
-          onAdd(roomId, task.trim());
-          setTask("");
-        }}
-      >
-        Assign
-      </Button>
+        <button
+          onClick={() => roomId && HOUSEKEEPING_CHECKLIST.forEach((item) => onAdd(roomId, item))}
+          style={{
+            fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, cursor: "pointer",
+            background: "var(--ink)", color: "var(--parchment)", border: "1px solid var(--ink)",
+          }}
+        >
+          Assign full checklist
+        </button>
+      </div>
     </div>
   );
 }

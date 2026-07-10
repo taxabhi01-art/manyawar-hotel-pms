@@ -1,10 +1,16 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { SectionTitle, Field, Button, Modal, EmptyState, currency, STATUS, ROOM_TYPES } from "../components.jsx";
 import { addRoom, updateRoom, deleteRoom } from "../lib/api.js";
 
-export default function Rooms({ rooms, bookings, reload }) {
+export default function Rooms({ rooms, bookings, highlightId, reload }) {
   const [modal, setModal] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`room-${highlightId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightId]);
 
   const saveRoom = async (form) => {
     setBusy(true);
@@ -43,7 +49,7 @@ export default function Rooms({ rooms, bookings, reload }) {
         <EmptyState text="No rooms added yet." action={<Button onClick={() => setModal("new")}>Add your first room</Button>} />
       ) : (
         rooms.map((r) => (
-          <div className="card" key={r.id}>
+          <div className="card" key={r.id} id={`room-${r.id}`} style={r.id === highlightId ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : undefined}>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 17, fontWeight: 600, width: 50 }}>{r.number}</span>
             <span style={{ fontSize: 13, color: "var(--ink70)", width: 90 }}>{r.type}</span>
             <span style={{ fontSize: 13, color: "var(--ink45)", width: 70 }}>Floor {r.floor}</span>

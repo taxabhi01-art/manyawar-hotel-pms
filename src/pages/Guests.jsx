@@ -1,12 +1,18 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill } from "../components.jsx";
 import { addGuest, updateGuest, deleteGuest, getIdProofSignedUrl } from "../lib/api.js";
 
-export default function Guests({ guests, bookings, reload }) {
+export default function Guests({ guests, bookings, highlightId, reload }) {
   const [modal, setModal] = useState(null);
   const [idModal, setIdModal] = useState(null);
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`guest-${highlightId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightId]);
 
   const saveGuest = async (form) => {
     setBusy(true);
@@ -72,7 +78,12 @@ export default function Guests({ guests, bookings, reload }) {
         filtered.map((g) => {
           const stays = bookings.filter((b) => b.guest_id === g.id).length;
           return (
-            <div className="card" key={g.id}>
+            <div
+              className="card"
+              key={g.id}
+              id={`guest-${g.id}`}
+              style={g.id === highlightId ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : undefined}
+            >
               <div className="card-col">
                 <div className="title">
                   {g.name} {g.vip && "⭐"}

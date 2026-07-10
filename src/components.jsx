@@ -257,6 +257,19 @@ export function splitInclusiveGst(total, gstPercent) {
   return { base: Math.round(base), gst: Math.round(total - base) };
 }
 
+export const HOUSEKEEPING_CHECKLIST = [
+  "Change bedsheets & pillow covers",
+  "Clean bathroom & restock toiletries",
+  "Vacuum / sweep & mop floor",
+  "Dust furniture & surfaces",
+  "Empty trash bins",
+  "Restock minibar / water bottles",
+  "Check AC / electronics working",
+  "Check towels & linen",
+];
+export const MAINTENANCE_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
+export const MAINTENANCE_STATUSES = ["Open", "In Progress", "Resolved"];
+
 export const STATUS = {
   available: { label: "Available", color: "#5f8863" },
   occupied: { label: "Occupied", color: "#a6452f" },

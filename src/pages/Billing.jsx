@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
-import { addPayment, updateBooking, getSettings } from "../lib/api.js";
+import { addPayment, updateBooking, getSettings, logActivity } from "../lib/api.js";
 
 export default function Billing({ bookings, guests, rooms, inventoryUsage, reload }) {
   const [payModal, setPayModal] = useState(null);
@@ -26,6 +26,10 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
     const clamped = Math.max(0, Math.min(subtotal, discount));
     const total = computeBookingTotal({ ...booking, subtotal, discount: clamped });
     await updateBooking(booking.id, { discount: clamped, discount_reason: reason, total });
+    if (clamped > 0) {
+      const g = guests.find((x) => x.id === booking.guest_id);
+      logActivity("Discount applied", `${currency(clamped)} on booking for ${g ? g.name : "guest"}${reason ? ` — ${reason}` : ""}`);
+    }
     setDiscountModal(null);
     reload();
   };
@@ -42,6 +46,8 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
   const refundDepositToGuest = async (booking) => {
     if (!confirm(`Mark ${currency(booking.deposit)} deposit as refunded to guest?`)) return;
     await updateBooking(booking.id, { deposit_status: "refunded", deposit_refunded: true });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Deposit refunded", `${currency(booking.deposit)} to ${g ? g.name : "guest"}`);
     reload();
   };
 

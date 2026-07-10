@@ -7,6 +7,7 @@ import {
   addInventoryUsage,
   deleteInventoryUsage,
   updateBooking,
+  logActivity,
 } from "../lib/api.js";
 
 const UNITS = ["pcs", "bottle", "pack", "kg", "ltr", "plate"];
@@ -71,6 +72,7 @@ export default function Inventory({ items, usage, bookings, guests, rooms, reloa
       const newTotal = computeBookingTotal({ ...booking, items_total: newItemsTotal });
       await updateBooking(booking.id, { items_total: newItemsTotal, total: newTotal });
     }
+    logActivity("Inventory usage undone", `${u.item_name} ×${u.quantity} (${currency(u.amount)})`);
     reload();
   };
 

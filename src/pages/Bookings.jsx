@@ -31,9 +31,10 @@ import {
   updateCoGuest,
   uploadIdProof,
   getIdProofSignedUrl,
+  logActivity,
 } from "../lib/api.js";
 
-export default function Bookings({ rooms, guests, bookings, coGuests, onOpenCheckIn, onOpenCheckOut, reload }) {
+export default function Bookings({ rooms, guests, bookings, coGuests, highlightId, onOpenCheckIn, onOpenCheckOut, reload }) {
   const [modal, setModal] = useState(null);
   const [editModal, setEditModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
@@ -43,6 +44,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`booking-${highlightId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightId]);
 
   const roomOf = (id) => rooms.find((r) => r.id === id);
   const guestOf = (id) => guests.find((g) => g.id === id);
@@ -93,6 +100,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
     if (b.status === "checked-in") {
       await updateRoom(b.room_id, { status: "available" });
     }
+    const g = guestOf(b.guest_id);
+    const r = roomOf(b.room_id);
+    logActivity("Booking cancelled", `${g ? g.name : "Guest"} — Room ${r ? r.number : "—"}${reason ? ` (${reason})` : ""}`);
     reload();
   };
   const saveDates = async (booking, { checkIn, checkOut }) => {
@@ -171,7 +181,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, onOpenChec
           const g = guestOf(b.guest_id);
           const r = roomOf(b.room_id);
           return (
-            <div className="card" key={b.id}>
+            <div className="card" key={b.id} id={`booking-${b.id}`} style={b.id === highlightId ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : undefined}>
               <div className="card-col">
                 <div className="title">
                   {g ? g.name : "Guest removed"} {g?.vip && "⭐"}

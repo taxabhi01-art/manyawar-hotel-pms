@@ -57,8 +57,19 @@ hosting (Vercel), real staff logins. Ye ab **production mein live hai** aur roz 
     se seedha trigger ho sakte hain
   - Same-day checkout allowed (day-use bookings)
   - Cancel booking (status change, record delete nahi hota) — "no-show" status bhi hai (Night Audit se)
-- **Night Audit tab** (owner only) — end-of-day summary: arrivals/departures done vs expected,
-  no-show detection + marking, occupancy/revenue snapshot, "Run audit" se history save hoti hai
+- **Night Audit tab** (owner only) — end-of-day summary with full itemized detail (not just counts):
+  arrivals/departures with names, no-show detection + marking, early check-in/late checkout lists,
+  revenue-by-mode and expenses-by-category breakdowns, "Run audit" saves a full JSON snapshot so
+  history entries can show complete detail later via "View details"
+- **Activity log** (owner only) — auto-logs significant actions (cancellations, discounts, deposit
+  refunds, staff removal, expenses, no-shows, maintenance tickets); owner sees an unread-count banner
+  (tracked via localStorage, not push notifications)
+- **Global search** (sidebar) — search guests/bookings/rooms by name/phone/ref/number, clicking a
+  result switches tab and highlights + scrolls to that row (`highlightId` prop pattern)
+- **Maintenance tickets** (sab dekh sakte hain) — separate from housekeeping tasks; priority levels,
+  WhatsApp staff assignment, Open/In Progress/Resolved status
+- **Housekeeping checklist** — quick-add standard task chips in Staff tab, or "Assign full checklist"
+  for a complete room turnover in one click
 - **Staff** — WhatsApp number (phone) primary/required field hai, email optional (sirf app-login ke
   liye). Task assign karte hi WhatsApp automatically khulta hai — popup-blocker-safe (tab pehle khulta
   hai, phir database save hota hai, taaki browser block na kare)
@@ -115,6 +126,8 @@ Migrations is order mein chalayi gayi hain (sab already run ho chuki hain live p
 8. `supabase-schema-v8.sql` — `inventory_items` (catalog), `inventory_usage` (auto stock-deduct +
    auto bill-add when logged against a booking), `bookings.items_total`
 9. `supabase-schema-v9.sql` — `night_audits.early_checkins` / `late_checkouts` counts
+10. `supabase-schema-v10.sql` — `activity_log` table, `maintenance_tickets` table,
+    `night_audits.details` (jsonb full-detail snapshot)
 
 Agar future mein koi naya SQL change ho, isi pattern mein `supabase-schema-v5.sql` banega —
 additive rehta hai (purana kabhi nahi todta), `create table if not exists` /
@@ -156,7 +169,9 @@ manyawar-pms/
         ├── Staff.jsx            ← tasks + attendance + WhatsApp task assign
         ├── Finance.jsx          ← owner-only: income, expenses (with salary tracking), cash flow
         ├── Inventory.jsx        ← item catalog + usage log (auto stock + auto bill)
-        ├── NightAudit.jsx       ← end-of-day summary, no-show marking, audit history
+        ├── NightAudit.jsx       ← end-of-day summary with full detail, no-show marking, history
+        ├── Maintenance.jsx      ← repair ticket system (priority, assignment, status)
+        ├── Activity.jsx         ← owner-only activity log viewer
         ├── Reports.jsx          ← owner-only revenue + Excel export + charts
         └── Settings.jsx         ← owner-only GST/hotel settings
 ```
