@@ -117,7 +117,16 @@ export function datesOverlap(aStart, aEnd, bStart, bEnd) {
 
 // A room is truly available for a stay from checkIn up to (not including) checkOut,
 // if no active booking overlaps that range.
-export function isRoomAvailableForDates(roomId, checkIn, checkOut, bookings, excludeBookingId) {
+export function isRoomAvailableForDates(roomId, checkIn, checkOut, bookings, excludeBookingId, roomStatus) {
+  // A booking's stored dates aren't the only truth — if the room is currently
+  // occupied or being cleaned RIGHT NOW and the requested range includes today,
+  // treat it as unavailable even if the booking's own dates say otherwise
+  // (covers overstays, delayed checkouts, and similar date-mismatch edge cases).
+  if (roomStatus === "occupied" || roomStatus === "cleaning") {
+    const today = todayISO();
+    const effectiveCheckOut = checkOut > checkIn ? checkOut : addDaysISO(checkIn, 1);
+    if (checkIn <= today && today < effectiveCheckOut) return false;
+  }
   return !bookings.some(
     (b) =>
       b.room_id === roomId &&

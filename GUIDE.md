@@ -370,3 +370,19 @@ Aapke screenshot mein jo Room 101 do baar checked-in dikh raha hai (aman aur Abh
 
 ### Naya feature: Maintenance alert
 Ab jab bhi **New booking** banate ho ya **Change room** karte ho, agar select kiya hua room mein koi **open maintenance ticket** hai (Open ya In Progress), to ek warning dikhegi jisme **poora reason** hoga (jaise "AC kharab hai — Priority: High"). Aap chahe to **confirm karke aage badh sakte ho** (jaise emergency mein), ya cancel karke doosra room choose kar sakte ho.
+
+## UPDATE 14: ⚠ Doosra bug-fix — occupied/cleaning rooms bhi New Booking mein dikh rahe the
+
+**Koi naya SQL nahi lagta.**
+
+### Asli wajah (aapne sahi pakड़ा tha)
+
+UPDATE 13 wala fix sirf "same-day booking ka overlap-math" theek karta tha. Lekin ek aur gap tha: availability check **sirf booking ki stored dates** dekhta tha — agar koi guest apni booked checkout date se **aage bhi room mein reh raha ho** (overstay, ya checkout process abhi nahi hua), to system ko pata nahi chalta tha ki room **abhi bhi physically occupied hai**, kyunki uski booking-dates ke hisaab se stay "khatam" ho chuki dikhti thi.
+
+Ye gap "Change room" mein kam dikhta tha (kyunki wahan poori booking ki dates use hoti hain, jo zyada wide range hone se overlap pakड़ leta tha), lekin "New Booking" mein zyada expose hota tha jab aap **aaj ke liye** (same-day) booking bana rahe the.
+
+### Fix
+Ab availability check mein **room ka live status bhi dekha jata hai** — agar koi room abhi "occupied" ya "cleaning" mein hai AUR aap **aaj ke liye** koi booking bana rahe ho, to wo room **hamesha excluded** hoga, chahe uski booking ki dates kuch bhi kahen. Future dates (aane wale din) ke liye booking banate waqt ye extra check nahi lagta — sirf "aaj" wale case mein.
+
+### ⚠ Ek baar phir — purana data
+Room 201 wali double-booking (aman + sadhna) abhi bhi database mein hai — agar theek nahi kiya to abhi bhi confusing rahega. Dono mein se ek ko **Cancel** karo ya **Change room** se kisi aur khaali room mein shift karo.

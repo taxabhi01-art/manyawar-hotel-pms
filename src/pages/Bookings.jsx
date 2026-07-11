@@ -378,7 +378,7 @@ function CancelBookingModal({ booking, guest, room, onClose, onConfirm }) {
 // ---------------------------------------------------------------
 function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, maintenanceTickets, onClose, onConfirm }) {
   const availableRooms = allRooms.filter(
-    (r) => r.id !== booking.room_id && r.status !== "maintenance" && isRoomAvailableForDates(r.id, booking.check_in, booking.check_out, bookings, booking.id)
+    (r) => r.id !== booking.room_id && r.status !== "maintenance" && isRoomAvailableForDates(r.id, booking.check_in, booking.check_out, bookings, booking.id, r.status)
   );
   const [newRoomId, setNewRoomId] = useState(availableRooms[0]?.id || "");
   const [updateRate, setUpdateRate] = useState(false);
@@ -482,7 +482,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   // Only rooms with no overlapping booking for the CHOSEN dates show up here —
   // this is what stops a room from being double-booked for future dates.
   const availableForDates = useMemo(
-    () => allRooms.filter((r) => isRoomAvailableForDates(r.id, checkIn, checkOut, bookings)),
+    () => allRooms.filter((r) => isRoomAvailableForDates(r.id, checkIn, checkOut, bookings, undefined, r.status)),
     [allRooms, bookings, checkIn, checkOut]
   );
   const [roomId, setRoomId] = useState("");
