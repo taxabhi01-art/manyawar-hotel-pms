@@ -447,6 +447,7 @@ export default function App() {
                 guests={data.guests}
                 bookings={data.bookings}
                 coGuests={data.coGuests}
+                maintenanceTickets={data.maintenanceTickets}
                 highlightId={highlightId}
                 onOpenCheckIn={(b) => setCheckInModal(b)}
                 onOpenCheckOut={(b) => setCheckOutModal(b)}

@@ -349,3 +349,24 @@ Supabase → SQL Editor → `supabase-schema-v11.sql` Run karo.
 **4. Inventory ka bug fix ho gaya** — Asli wajah: "Log item used" button **sirf tab dikhta tha jab koi active booking ho** — agar koi guest currently reserved/checked-in nahi tha, to button hi gayab ho jata tha! Ab button **hamesha dikhega**. Saath hi ek naya option add kiya — **"Self-use / internal"** — jab item kisi guest ko nahi, khud staff ke istemal ke liye ya kisi aur wajah se nikala ho, to bina kisi booking ke bhi log kar sakte ho (stock kam hoga, lekin kisi guest ke bill mein nahi jayega).
 
 **5. Mobile mein search bar ka layout fix** — Phone pe ab search bar apni **alag row** mein hai (sabse neeche), isliye Dashboard/Bookings jaise nav options ab hide nahi honge — sab dikhenge aur scroll kar sakte ho.
+
+## UPDATE 13: ⚠ Zaroori bug-fix — same-day booking se double-booking ho rahi thi
+
+**Koi naya SQL nahi lagta** — sirf code files replace karo. Lekin ye update **sabse zaroori** hai, deploy karne se pehle zaroor daal lena.
+
+### Asli bug (jo screenshot mein dikha)
+
+Jab bhi koi **same-day (day-use) booking** hoti thi (check-in aur check-out dono ek hi din), room-availability check karne wala logic isko "0-din ka stay" samajh kar **completely ignore** kar deta tha. Iska matlab: us room ke liye ek aur booking bana dena possible ho jata tha **usi din ke liye** — jaisa screenshot mein hua, Room 101 mein do guests (aman aur Abhi) **dono checked-in** dikh rahe the!
+
+**Fix ho gaya hai** — ab same-day booking bhi poori tarah us din ke liye room ko "occupied" maan kar block karti hai. Ye fix in teeno jagah apply hota hai:
+1. **New booking** — sirf wahi rooms dikhenge jo check-in/check-out dates ke liye sach mein khaali hain
+2. **Change room** — sirf wahi rooms dikhenge jo us booking ki dates ke liye khaali hain
+3. **Edit dates** — date change karte waqt bhi sahi se check hota hai
+
+### ⚠ Purana data theek karna hoga
+Aapke screenshot mein jo Room 101 do baar checked-in dikh raha hai (aman aur Abhi dono), **wo purani galti hai jo already database mein ho chuki hai** — naya code isse automatically theek nahi karega. Aapko manually ek karna hoga:
+- Dono mein se jo galat/duplicate hai use **Cancel booking** kar do, ya
+- Agar dono sach mein valid hain, to unmein se ek ko **Change room** karke kisi aur khaali room mein shift kar do
+
+### Naya feature: Maintenance alert
+Ab jab bhi **New booking** banate ho ya **Change room** karte ho, agar select kiya hua room mein koi **open maintenance ticket** hai (Open ya In Progress), to ek warning dikhegi jisme **poora reason** hoga (jaise "AC kharab hai — Priority: High"). Aap chahe to **confirm karke aage badh sakte ho** (jaise emergency mein), ya cancel karke doosra room choose kar sakte ho.

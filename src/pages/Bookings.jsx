@@ -34,7 +34,7 @@ import {
   logActivity,
 } from "../lib/api.js";
 
-export default function Bookings({ rooms, guests, bookings, coGuests, highlightId, onOpenCheckIn, onOpenCheckOut, reload }) {
+export default function Bookings({ rooms, guests, bookings, coGuests, maintenanceTickets, highlightId, onOpenCheckIn, onOpenCheckOut, reload }) {
   const [modal, setModal] = useState(null);
   const [editModal, setEditModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
@@ -288,6 +288,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, highlightI
           allRooms={bookableRooms}
           bookings={bookings}
           guests={guests}
+          maintenanceTickets={maintenanceTickets}
           onClose={() => setModal(null)}
           onCreate={createBooking}
           busy={busy}
@@ -331,6 +332,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, highlightI
           currentRoom={roomOf(changeRoomModal.room_id)}
           allRooms={rooms}
           bookings={bookings}
+          maintenanceTickets={maintenanceTickets}
           onClose={() => setChangeRoomModal(null)}
           onConfirm={(payload) => changeRoom(payload)}
         />
@@ -374,13 +376,24 @@ function CancelBookingModal({ booking, guest, room, onClose, onConfirm }) {
 // CHANGE ROOM — move a checked-in guest to a different room (e.g.
 // maintenance issue, guest request). Frees the old room, occupies the new one.
 // ---------------------------------------------------------------
-function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, onClose, onConfirm }) {
+function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, maintenanceTickets, onClose, onConfirm }) {
   const availableRooms = allRooms.filter(
     (r) => r.id !== booking.room_id && r.status !== "maintenance" && isRoomAvailableForDates(r.id, booking.check_in, booking.check_out, bookings, booking.id)
   );
   const [newRoomId, setNewRoomId] = useState(availableRooms[0]?.id || "");
   const [updateRate, setUpdateRate] = useState(false);
   const newRoom = availableRooms.find((r) => r.id === newRoomId);
+  const activeTicket = (maintenanceTickets || []).find((t) => t.room_id === newRoomId && t.status !== "Resolved");
+
+  const confirmMove = () => {
+    if (activeTicket) {
+      const proceed = confirm(
+        `⚠ Room ${newRoom?.number || ""} has an open maintenance issue:\n\n"${activeTicket.issue}" (Priority: ${activeTicket.priority}, Status: ${activeTicket.status})\n\nMove the guest here anyway?`
+      );
+      if (!proceed) return;
+    }
+    onConfirm({ booking, newRoomId, updateRate });
+  };
 
   return (
     <Modal title="Change room" onClose={onClose} width={420}>
@@ -408,13 +421,18 @@ function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, onCl
               the guest's originally agreed price.
             </span>
           </label>
+          {activeTicket && (
+            <div style={{ marginTop: 12, background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5 }}>
+              ⚠ <strong>Room {newRoom?.number} has an open maintenance issue:</strong> "{activeTicket.issue}" (Priority: {activeTicket.priority}, Status: {activeTicket.status})
+            </div>
+          )}
         </>
       )}
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button disabled={!newRoomId} onClick={() => onConfirm({ booking, newRoomId, updateRate })}>
+        <Button disabled={!newRoomId} onClick={confirmMove}>
           Move room
         </Button>
       </div>
@@ -447,7 +465,7 @@ function WhatsAppConfirmModal({ info, onClose }) {
   );
 }
 
-function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
+function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose, onCreate, busy }) {
   const [guestMode, setGuestMode] = useState(guests.length ? "existing" : "new");
   const [existingId, setExistingId] = useState(guests[0]?.id || "");
   const [guestSearch, setGuestSearch] = useState("");
@@ -479,11 +497,18 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
   const selectedRoom = availableForDates.find((r) => r.id === roomId);
   const nights = nightsBetween(checkIn, checkOut);
   const previewRate = selectedRoom ? computeRoomRate(selectedRoom, occupancy) : 0;
+  const activeTicket = (maintenanceTickets || []).find((t) => t.room_id === roomId && t.status !== "Resolved");
 
   const submit = () => {
     if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
     if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
     if (!roomId) return alert("No room is available for these dates. Try a different date range.");
+    if (activeTicket) {
+      const proceed = confirm(
+        `⚠ Room ${selectedRoom?.number || ""} has an open maintenance issue:\n\n"${activeTicket.issue}" (Priority: ${activeTicket.priority}, Status: ${activeTicket.status})\n\nBook this room anyway?`
+      );
+      if (!proceed) return;
+    }
     if (checkIn < todayISO()) {
       const proceed = confirm(
         `⚠ Check-in date (${checkIn}) is in the past.\n\nThis is allowed (useful for backdating a walk-in you forgot to log), but double-check it's correct.\n\nContinue?`
@@ -625,6 +650,11 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
         <div style={{ marginTop: 10, background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "8px 12px", fontSize: 12.5 }}>
           {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(previewRate)}</strong> · {nights} night{nights > 1 ? "s" : ""} ·
           Total: <strong>{currency(previewRate * nights)}</strong>
+        </div>
+      )}
+      {activeTicket && (
+        <div style={{ marginTop: 10, background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5 }}>
+          ⚠ <strong>Room {selectedRoom?.number} has an open maintenance issue:</strong> "{activeTicket.issue}" (Priority: {activeTicket.priority}, Status: {activeTicket.status})
         </div>
       )}
       <div className="grid-2" style={{ marginTop: 14 }}>

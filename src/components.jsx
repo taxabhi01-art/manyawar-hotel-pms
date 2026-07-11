@@ -99,8 +99,20 @@ export function nightsBetween(a, b) {
 }
 
 // Two stay ranges overlap if one starts before the other ends (checkout day itself is free)
+function addDaysISO(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// A same-day (day-use) booking has checkIn === checkOut, which is a zero-width
+// range — without this adjustment, two zero/near-zero ranges can slip past a
+// naive overlap check and double-book the same room. Treat a zero-width range
+// as blocking that one calendar day.
 export function datesOverlap(aStart, aEnd, bStart, bEnd) {
-  return aStart < bEnd && bStart < aEnd;
+  const aEndEff = aEnd > aStart ? aEnd : addDaysISO(aStart, 1);
+  const bEndEff = bEnd > bStart ? bEnd : addDaysISO(bStart, 1);
+  return aStart < bEndEff && bStart < aEndEff;
 }
 
 // A room is truly available for a stay from checkIn up to (not including) checkOut,
