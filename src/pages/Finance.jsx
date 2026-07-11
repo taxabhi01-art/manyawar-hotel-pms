@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES, PAYMENT_MODES } from "../components.jsx";
 import { addExpense, updateExpense, deleteExpense, addStaff, logActivity } from "../lib/api.js";
 
 export default function Finance({ bookings, expenses, staff, reload }) {
@@ -57,10 +57,28 @@ export default function Finance({ bookings, expenses, staff, reload }) {
     .filter(([mode]) => mode !== "Cash" && mode !== "UPI")
     .reduce((s, [, amt]) => s + amt, 0);
   const totalReceivedInRange = cashInRange + upiInRange + otherModesInRange;
-  const expensesInRange = expenses.filter((e) => e.expense_date >= cfStart && e.expense_date <= cfEnd).reduce((s, e) => s + e.amount, 0);
+
+  const rangeExpenses = useMemo(
+    () => expenses.filter((e) => e.expense_date >= cfStart && e.expense_date <= cfEnd),
+    [expenses, cfStart, cfEnd]
+  );
+  const expenseByModeRange = useMemo(() => {
+    const map = {};
+    rangeExpenses.forEach((e) => (map[e.mode || "Cash"] = (map[e.mode || "Cash"] || 0) + e.amount));
+    return map;
+  }, [rangeExpenses]);
+  const cashExpenseInRange = expenseByModeRange["Cash"] || 0;
+  const upiExpenseInRange = expenseByModeRange["UPI"] || 0;
+  const otherExpenseInRange = Object.entries(expenseByModeRange)
+    .filter(([mode]) => mode !== "Cash" && mode !== "UPI")
+    .reduce((s, [, amt]) => s + amt, 0);
+  const expensesInRange = cashExpenseInRange + upiExpenseInRange + otherExpenseInRange;
+
+  const netCashInRange = cashInRange - cashExpenseInRange;
+  const netUpiInRange = upiInRange - upiExpenseInRange;
+  const netOtherInRange = otherModesInRange - otherExpenseInRange;
   const netInRange = totalReceivedInRange - expensesInRange;
   const totalPending = bookings.reduce((s, b) => s + Math.max(0, (b.total || 0) - (b.paid_amount || 0)), 0);
-
 
   // ---- Cash flow chart data ----
   const chartData = useMemo(() => {
@@ -123,18 +141,21 @@ export default function Finance({ bookings, expenses, staff, reload }) {
           </div>
         }
       />
-      <div className="stat-grid" style={{ marginBottom: 30 }}>
+      <div className="stat-grid" style={{ marginBottom: 12 }}>
         <div className="stat-card">
           <div className="label">Cash received</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(cashInRange)}</div>
+          <div className="sub">Spent: {currency(cashExpenseInRange)}</div>
         </div>
         <div className="stat-card">
           <div className="label">UPI received</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(upiInRange)}</div>
+          <div className="sub">Spent: {currency(upiExpenseInRange)}</div>
         </div>
         <div className="stat-card">
           <div className="label">Other (Bank/Card)</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(otherModesInRange)}</div>
+          <div className="sub">Spent: {currency(otherExpenseInRange)}</div>
         </div>
         <div className="stat-card">
           <div className="label">Total received</div>
@@ -145,12 +166,31 @@ export default function Finance({ bookings, expenses, staff, reload }) {
           <div className="value" style={{ color: "var(--rust)" }}>{currency(expensesInRange)}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Net</div>
-          <div className="value" style={{ color: netInRange >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netInRange)}</div>
-        </div>
-        <div className="stat-card">
           <div className="label">Total pending (all bookings)</div>
           <div className="value" style={{ color: "var(--rust)" }}>{currency(totalPending)}</div>
+        </div>
+      </div>
+
+      <SectionTitle eyebrow="By mode" title="Net cash on hand, by payment mode" />
+      <div className="stat-grid" style={{ marginBottom: 12 }}>
+        <div className="stat-card">
+          <div className="label">Net Cash</div>
+          <div className="value" style={{ color: netCashInRange >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netCashInRange)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Net UPI</div>
+          <div className="value" style={{ color: netUpiInRange >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netUpiInRange)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Net Other (Bank/Card)</div>
+          <div className="value" style={{ color: netOtherInRange >= 0 ? "var(--sage)" : "var(--rust)" }}>{currency(netOtherInRange)}</div>
+        </div>
+        <div className="stat-card" style={{ background: netInRange >= 0 ? "rgba(95,136,99,0.08)" : "rgba(166,69,47,0.08)" }}>
+          <div className="label">Total Net Profit / Loss</div>
+          <div className="value" style={{ color: netInRange >= 0 ? "var(--sage)" : "var(--rust)", fontSize: 22 }}>
+            {netInRange >= 0 ? "Profit " : "Loss "}
+            {currency(Math.abs(netInRange))}
+          </div>
         </div>
       </div>
 
@@ -238,6 +278,7 @@ export default function Finance({ bookings, expenses, staff, reload }) {
             <div className="card" key={e.id}>
               <span style={{ fontSize: 12.5, color: "var(--ink45)", width: 90 }}>{fmtDate(e.expense_date)}</span>
               <Pill color="#46536b">{e.category}</Pill>
+              <Pill color="#b8863f">{e.mode || "Cash"}</Pill>
               <span style={{ flex: 1, fontSize: 13 }}>
                 {e.description}
                 {paidStaff && (
@@ -274,9 +315,9 @@ export default function Finance({ bookings, expenses, staff, reload }) {
   );
 }
 
-function ExpenseModal({ expense, staff, onClose, onSave }) {
+export function ExpenseModal({ expense, staff, onClose, onSave }) {
   const [form, setForm] = useState(
-    expense || { category: EXPENSE_CATEGORIES[0], amount: 0, description: "", expense_date: todayISO(), staff_id: "", salary_period: "" }
+    expense || { category: EXPENSE_CATEGORIES[0], amount: 0, mode: PAYMENT_MODES[0], description: "", expense_date: todayISO(), staff_id: "", salary_period: "" }
   );
   const [addingStaff, setAddingStaff] = useState(false);
   const [newStaffName, setNewStaffName] = useState("");
@@ -354,6 +395,13 @@ function ExpenseModal({ expense, staff, onClose, onSave }) {
         )}
         <Field label="Amount">
           <input className="input" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} />
+        </Field>
+        <Field label="Paid via">
+          <select className="input" value={form.mode || PAYMENT_MODES[0]} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+            {PAYMENT_MODES.map((m) => (
+              <option key={m}>{m}</option>
+            ))}
+          </select>
         </Field>
         <Field label="Date">
           <input className="input" type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} />

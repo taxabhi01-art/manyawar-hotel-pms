@@ -107,7 +107,10 @@ export async function listExpenses() {
   return supabase.from("expenses").select("*").order("expense_date", { ascending: false });
 }
 export async function addExpense(expense) {
-  return supabase.from("expenses").insert(expense).select().single();
+  // No .select() here — staff can INSERT expenses but can't SELECT them back
+  // (RLS keeps the full ledger owner-only), so requesting the row back would
+  // fail for staff logins even though the insert itself succeeded.
+  return supabase.from("expenses").insert(expense);
 }
 export async function updateExpense(id, patch) {
   return supabase.from("expenses").update(patch).eq("id", id);

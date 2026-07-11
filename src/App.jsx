@@ -15,6 +15,7 @@ import NightAudit from "./pages/NightAudit.jsx";
 import Inventory from "./pages/Inventory.jsx";
 import Maintenance from "./pages/Maintenance.jsx";
 import Activity from "./pages/Activity.jsx";
+import AddExpense from "./pages/AddExpense.jsx";
 import {
   listRooms,
   listGuests,
@@ -45,6 +46,7 @@ const BASE_NAV = [
   { id: "billing", label: "Billing" },
   { id: "inventory", label: "Inventory" },
   { id: "maintenance", label: "Maintenance" },
+  { id: "addexpense", label: "Add Expense" },
   { id: "staff", label: "Staff" },
 ];
 const OWNER_NAV = [
@@ -471,6 +473,7 @@ export default function App() {
             {tab === "maintenance" && (
               <Maintenance tickets={data.maintenanceTickets} rooms={data.rooms} staff={data.staff} reload={reload} />
             )}
+            {tab === "addexpense" && <AddExpense staff={data.staff} reload={reload} />}
             {tab === "staff" && (
               <Staff staff={data.staff} rooms={data.rooms} tasks={data.tasks} attendance={data.attendance} reload={reload} />
             )}

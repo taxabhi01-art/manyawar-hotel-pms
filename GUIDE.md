@@ -415,3 +415,21 @@ Jab purana data ab enter karte the (jaise kisi register se past ki bookings app 
 - Record payment: **"Paid on"** — same tareeka
 
 Ye sirf **tabhi badlo jab purana data enter kar rahe ho** — normal roz ke istemal mein defaults (aaj ki date) waise hi rakho, kuch alag se nahi karna padega. Ek baar sahi date daal do, uske baad **Reports aur Finance dono automatically us sahi date ke hisaab se hi count karenge** — kyunki wo pehle se hi payment ki date (na ki "aaj") ke hisaab se calculate hote hain.
+
+## UPDATE 17: Staff bhi expense add kar sake + mode-wise cash flow
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v13.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye features:
+
+**1. Staff ke liye naya "Add Expense" tab** — Ab **sabko** (owner + staff) sidebar mein "Add Expense" tab dikhega. Staff sirf **naya expense add kar sakta hai** — poori financial ledger (Finance tab, reports, totals) **abhi bhi sirf owner ko dikhti hai**. Isse front-desk staff jab bhi cash se koi cheez kharide (jaise supplies, repair payment), turant record kar sakta hai, bina financial details dekhe.
+
+**2. Expense mein ab Payment mode hai** — "Cash", "UPI", "Bank Transfer", "Card", "Other" — jaisa payments mein hota hai, wahi ab expenses mein bhi hai.
+
+**3. Finance tab mein mode-wise cash flow** — selected date range ke liye ab dikhta hai:
+   - Har mode mein **kitna aaya, kitna gaya** (Cash received/spent, UPI received/spent, alag-alag)
+   - **Net Cash, Net UPI, Net Other** — alag-alag balance
+   - Sabse neeche **"Total Net Profit / Loss"** — poore period ka final result, ek nazar mein
