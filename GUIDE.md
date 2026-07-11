@@ -401,3 +401,17 @@ Supabase → SQL Editor → `supabase-schema-v12.sql` Run karo.
 **2. Deposit ka payment mode** — New booking banate waqt agar advance/deposit daalo, to ab ek naya field aayega — **"Deposit paid via"** (Cash/UPI/Bank/Card/Other). Ye Bookings aur Billing dono jagah dikhega.
 
 **3. Owner ke liye payment correction** — Agar kabhi galat amount ya galat mode record ho jaye, to **sirf owner login** ko har payment entry ke paas "**edit**" aur "**delete**" link dikhega (staff ko nahi dikhega). Edit karne se booking ka total paid amount **automatically sahi ho jata hai**, aur ye correction Activity log mein bhi record hoti hai.
+
+## UPDATE 16: Purani booking/payment entry karne ka option (backdating)
+
+**Koi naya SQL nahi lagta.**
+
+### Problem jo aapne bataya
+Jab purana data ab enter karte the (jaise kisi register se past ki bookings app mein daalna), "Booked on" date aur payment ki date hamesha **aaj ki** ban jaati thi — chahe booking/payment asal mein kisi purani date ki ho. Isse Reports aur Finance galat period mein revenue dikha rahe the.
+
+### Fix
+**New Booking** aur **Record payment**, dono forms mein ab ek extra date-field hai:
+- New booking: **"Booked on"** — default aaj ki date, lekin badal sakte ho purani date pe
+- Record payment: **"Paid on"** — same tareeka
+
+Ye sirf **tabhi badlo jab purana data enter kar rahe ho** — normal roz ke istemal mein defaults (aaj ki date) waise hi rakho, kuch alag se nahi karna padega. Ek baar sahi date daal do, uske baad **Reports aur Finance dono automatically us sahi date ke hisaab se hi count karenge** — kyunki wo pehle se hi payment ki date (na ki "aaj") ke hisaab se calculate hote hain.

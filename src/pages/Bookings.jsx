@@ -57,7 +57,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const guestOf = (id) => guests.find((g) => g.id === id);
   const bookableRooms = rooms.filter((r) => r.status !== "maintenance");
 
-  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, depositMode, coGuestsCount, bookingRef }) => {
+  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, depositMode, coGuestsCount, bookingRef, bookedOn }) => {
     setBusy(true);
     let guestId = guest.id;
     let fullGuest = guest;
@@ -89,6 +89,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       deposit_refunded: false,
       co_guests_count: coGuestsCount || 0,
       booking_ref: bookingRef || null,
+      created_at: bookedOn ? new Date(bookedOn + "T12:00:00").toISOString() : undefined,
     });
     setBusy(false);
     setModal(null);
@@ -481,6 +482,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   const [depositMode, setDepositMode] = useState(PAYMENT_MODES[0]);
   const [coGuestsCount, setCoGuestsCount] = useState(0);
   const [bookingRef, setBookingRef] = useState("");
+  const [bookedOn, setBookedOn] = useState(todayISO());
 
   // Only rooms with no overlapping booking for the CHOSEN dates show up here —
   // this is what stops a room from being double-booked for future dates.
@@ -534,6 +536,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
       source,
       deposit: Number(deposit) || 0,
       depositMode,
+      bookedOn,
       coGuestsCount: Number(coGuestsCount) || 0,
       bookingRef: bookingRef.trim(),
     });
@@ -687,6 +690,11 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
       <div style={{ marginTop: 14 }}>
         <Field label="Booking ID / reference (required — shows on bill) *">
           <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} placeholder="e.g. your own ledger number, OTA ref" required />
+        </Field>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <Field label="Booked on (change this only if entering an old/backdated record)">
+          <input className="input" type="date" max={todayISO()} value={bookedOn} onChange={(e) => setBookedOn(e.target.value)} />
         </Field>
       </div>
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>

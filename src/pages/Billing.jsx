@@ -20,10 +20,10 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
   // Supports one or more payment lines at once (e.g. guest pays part cash,
   // part UPI, in a single collection) — each line becomes its own payment
   // record so the mode breakdown stays accurate.
-  const recordPayment = async (booking, lines) => {
+  const recordPayment = async (booking, lines, paidOn) => {
     const total = lines.reduce((s, l) => s + l.amount, 0);
     for (const line of lines) {
-      await addPayment({ booking_id: booking.id, amount: line.amount, mode: line.mode, paid_on: todayISO() });
+      await addPayment({ booking_id: booking.id, amount: line.amount, mode: line.mode, paid_on: paidOn || todayISO() });
     }
     const newPaid = Math.min(booking.total, (booking.paid_amount || 0) + total);
     await updateBooking(booking.id, { paid_amount: newPaid });
@@ -243,7 +243,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
         })
       )}
       {payModal && (
-        <PaymentModal booking={payModal} onClose={() => setPayModal(null)} onSave={(lines) => recordPayment(payModal, lines)} />
+        <PaymentModal booking={payModal} onClose={() => setPayModal(null)} onSave={(lines, paidOn) => recordPayment(payModal, lines, paidOn)} />
       )}
       {discountModal && (
         <DiscountModal booking={discountModal} onClose={() => setDiscountModal(null)} onSave={(d, r) => applyDiscount(discountModal, d, r)} />
@@ -292,6 +292,7 @@ function buildBillMessage(booking, guest, room, settings, items) {
 function PaymentModal({ booking, onClose, onSave }) {
   const balance = booking.total - booking.paid_amount;
   const [lines, setLines] = useState([{ amount: balance, mode: PAYMENT_MODES[0] }]);
+  const [paidOn, setPaidOn] = useState(todayISO());
   const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
 
   const updateLine = (i, patch) => setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
@@ -335,6 +336,11 @@ function PaymentModal({ booking, onClose, onSave }) {
       <Button variant="ghost" onClick={addLine} style={{ marginTop: 10 }}>
         + Add another mode (split payment)
       </Button>
+      <div style={{ marginTop: 14 }}>
+        <Field label="Paid on (change this only if entering an old/backdated payment)">
+          <input className="input" type="date" max={todayISO()} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
+        </Field>
+      </div>
       <div style={{ marginTop: 14, fontSize: 13 }}>
         Total being recorded: <strong>{currency(total)}</strong>
       </div>
@@ -346,7 +352,10 @@ function PaymentModal({ booking, onClose, onSave }) {
           onClick={() => {
             if (total <= 0) return alert("Enter an amount greater than zero.");
             if (lines.some((l) => !l.amount || l.amount <= 0)) return alert("Every line needs an amount greater than zero.");
-            onSave(lines.map((l) => ({ amount: Number(l.amount), mode: l.mode })));
+            onSave(
+              lines.map((l) => ({ amount: Number(l.amount), mode: l.mode })),
+              paidOn
+            );
           }}
         >
           Save payment
