@@ -16,3 +16,25 @@ self.addEventListener("fetch", (event) => {
   // some browsers use to decide whether an app can be installed.
   event.respondWith(fetch(event.request));
 });
+
+// Real push notifications — these fire even if the app tab is closed,
+// as long as the browser/device is on and the person subscribed once.
+self.addEventListener("push", (event) => {
+  let payload = { title: "MANYAWAR HOTEL", body: "You have a new notification." };
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() };
+  } catch (e) {}
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: { url: payload.url || "/" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(self.clients.openWindow(event.notification.data?.url || "/"));
+});

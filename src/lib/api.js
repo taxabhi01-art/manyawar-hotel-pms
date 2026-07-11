@@ -197,3 +197,19 @@ export async function uploadIdProof(path, file) {
 export async function getIdProofSignedUrl(path) {
   return supabase.storage.from("id-proofs").createSignedUrl(path, 3600); // valid 1 hour
 }
+
+// ---------- PUSH NOTIFICATIONS ----------
+export async function savePushSubscription(sub) {
+  return supabase.from("push_subscriptions").upsert(sub, { onConflict: "endpoint" });
+}
+
+export async function sendPushNotification(userEmail, title, body, url) {
+  try {
+    return await supabase.functions.invoke("send-push", {
+      body: { user_email: userEmail, title, body, url },
+    });
+  } catch (e) {
+    // Push is a bonus channel (WhatsApp/in-app banner still work) — never let a push failure break the main action.
+    return { error: e };
+  }
+}

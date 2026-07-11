@@ -17,6 +17,18 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
   const lastMonth = useMemo(() => sumPaidInRange(bookings, lastMonthRange.start, lastMonthRange.end), [bookings]);
   const monthChange = lastMonth === 0 ? null : Math.round(((thisMonth - lastMonth) / lastMonth) * 100);
 
+  // ---- Hotel-industry metrics (month-to-date): ADR, RevPAR, Occupancy ----
+  const monthPrefix = today.slice(0, 7);
+  const dayOfMonth = Number(today.slice(8, 10));
+  const roomNightsAvailable = rooms.length * dayOfMonth;
+  const stayedThisMonth = bookings.filter(
+    (b) => b.check_in?.startsWith(monthPrefix) && (b.status === "checked-in" || b.status === "checked-out")
+  );
+  const roomNightsSold = stayedThisMonth.reduce((s, b) => s + (b.nights || 0), 0);
+  const occupancyPercent = roomNightsAvailable > 0 ? Math.round((roomNightsSold / roomNightsAvailable) * 100) : 0;
+  const adr = roomNightsSold > 0 ? Math.round(thisMonth / roomNightsSold) : 0;
+  const revPar = roomNightsAvailable > 0 ? Math.round(thisMonth / roomNightsAvailable) : 0;
+
   const dailyChart = useMemo(() => {
     const days = [];
     for (let i = 13; i >= 0; i--) days.push(daysAgo(i));
@@ -121,6 +133,25 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
         <div className="stat-card">
           <div className="label">Last month</div>
           <div className="value">{currency(lastMonth)}</div>
+        </div>
+      </div>
+
+      <SectionTitle eyebrow="Hotel metrics" title="ADR, RevPAR & Occupancy — month to date" />
+      <div className="stat-grid" style={{ marginBottom: 30 }}>
+        <div className="stat-card">
+          <div className="label">Occupancy</div>
+          <div className="value">{occupancyPercent}%</div>
+          <div className="sub">{roomNightsSold} of {roomNightsAvailable} room-nights sold</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">ADR (Average Daily Rate)</div>
+          <div className="value">{currency(adr)}</div>
+          <div className="sub">Revenue ÷ room-nights sold</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">RevPAR</div>
+          <div className="value">{currency(revPar)}</div>
+          <div className="sub">Revenue per available room</div>
         </div>
       </div>
 

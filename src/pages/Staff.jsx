@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, todayISO, whatsappLink, HOUSEKEEPING_CHECKLIST, STAFF_ROLES, ATTENDANCE_STATUS } from "../components.jsx";
-import { addStaff, updateStaff, deleteStaff, addTask, updateTask, deleteTask, upsertAttendance, logActivity } from "../lib/api.js";
+import { addStaff, updateStaff, deleteStaff, addTask, updateTask, deleteTask, upsertAttendance, logActivity, sendPushNotification } from "../lib/api.js";
 
 export default function Staff({ staff, rooms, tasks, attendance, reload }) {
   const [modal, setModal] = useState(null);
@@ -55,6 +55,9 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
         `Hi ${assignedStaff.name}, you've been assigned: "${task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`
       );
     }
+    if (assignedStaff?.email) {
+      sendPushNotification(assignedStaff.email, "New task assigned", `${task} — Room ${room ? room.number : ""}`, "/");
+    }
     reload();
   };
 
@@ -82,6 +85,9 @@ export default function Staff({ staff, rooms, tasks, attendance, reload }) {
         assignedStaff.phone,
         `Hi ${assignedStaff.name}, you've been assigned: "${task.task}" for Room ${room ? room.number : ""}. Please attend when you can. — MANYAWAR HOTEL`
       );
+    }
+    if (assignedStaff?.email) {
+      sendPushNotification(assignedStaff.email, "New task assigned", `${task.task} — Room ${room ? room.number : ""}`, "/");
     }
     reload();
   };

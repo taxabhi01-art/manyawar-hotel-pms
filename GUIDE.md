@@ -433,3 +433,65 @@ Supabase → SQL Editor → `supabase-schema-v13.sql` Run karo.
    - Har mode mein **kitna aaya, kitna gaya** (Cash received/spent, UPI received/spent, alag-alag)
    - **Net Cash, Net UPI, Net Other** — alag-alag balance
    - Sabse neeche **"Total Net Profit / Loss"** — poore period ka final result, ek nazar mein
+
+## UPDATE 18: Deeper reports, Booking edit, Backup, aur real Push Notifications
+
+### Yahan 2 tarah ke steps hain:
+- **A, B, C** — normal (SQL + GitHub upload jaisa hamesha karte hain)
+- **D** — **bilkul naya tarika** (Supabase Edge Functions deploy karna), thoda technical hai, ek baar hi karna hai
+
+---
+
+### A) Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v14.sql` Run karo.
+
+### B) GitHub pe naya code upload karo (poora zip, `supabase/functions` folder bhi saath aayega — usko GitHub pe daalna zaroori nahi, wo sirf reference ke liye hai)
+
+### C) Ye seedhe features hain, kaam karna shuru ho jayega:
+
+**1. Deeper Reports — ADR, RevPAR, Occupancy** — Reports tab mein ab hotel-industry ke standard metrics hain (month-to-date):
+   - **Occupancy %** — kitne room-nights bike, kitne available the
+   - **ADR (Average Daily Rate)** — average kitne mein room bika
+   - **RevPAR** — total revenue ÷ total available rooms (dono metrics ek saath dekhne se pricing decisions lena aasan hota hai)
+
+**2. Booking Edit** — "Edit dates" ab **"Edit booking"** ban gaya — dates ke alawa ab **co-guests count, booking source, aur booking ID/reference** bhi edit kar sakte ho. Agar co-guests badalte ho to rate/total automatically naye occupancy ke hisaab se recalculate ho jata hai.
+
+**3. Data Backup (naya tab, sirf owner)** — Ek button dabao aur **poora data ek Excel file mein download** ho jata hai (rooms, guests, bookings, payments, staff, expenses, inventory, maintenance, night audits — sab alag-alag sheet mein). Mahine mein ek baar download karke Google Drive/email pe save kar lena — automatic nahi hai, jab bhi chaho tab manually download karna hoga.
+
+---
+
+### D) Real Push Notifications — naya setup (ek baar karna hai)
+
+**Ye kya karta hai:** Ab jab staff ko koi task assign hota hai, unhe **turant phone pe notification** aayegi — chahe app khula ho ya band. Pehle sirf tab khula hone par hi dikhta tha.
+
+**Isके liye Supabase CLI install karna padega** (ye ek command-line tool hai, ek baar setup karna hai):
+
+1. Apne computer pe terminal/command-prompt kholo, ye install karo:
+   ```
+   npm install -g supabase
+   ```
+2. Login karo: `supabase login`
+3. Apne project se link karo (project folder ke andar jaake):
+   ```
+   supabase link --project-ref <aapka-project-ref>
+   ```
+   (project-ref Supabase dashboard ke URL mein milega: `supabase.com/dashboard/project/XXXXX` — wahi XXXXX)
+4. Secrets set karo (ye humesha ke liye ek baar):
+   ```
+   supabase secrets set VAPID_PUBLIC_KEY=BDNvyO732-JpdAt3J6MOqRuWIIj2svazkTwzz_ESGcCt7hrn1gVh2Y-fJRHVV8IX_gE4ws_XQ8nKvZELH9KpJOM
+   supabase secrets set VAPID_PRIVATE_KEY=Jvt4oLzKYUW0Mb5bHFuedIbE9p0vrLft_tORiijQ36k
+   supabase secrets set VAPID_SUBJECT=mailto:aapka-email@example.com
+   ```
+   ⚠️ **VAPID_PRIVATE_KEY kisi ko mat dena, ye secret hai.**
+5. Dono functions deploy karo:
+   ```
+   supabase functions deploy send-push
+   supabase functions deploy daily-reminders
+   ```
+
+**"Kal checkout/check-in hai" wala automatic reminder set karne ke liye:**
+- Supabase Dashboard → **Edge Functions** → `daily-reminders` kholo → **"Schedule"** ya **"Cron"** tab mein jaake roz ek time set kar do (jaise subah 9 baje) — bas itna hi, uske baad automatic chalta rahega.
+
+**Agar ye technical setup abhi nahi karna:** Koi baat nahi — baaki sab (WhatsApp notification, in-app banner, aur naya **"Tomorrow's schedule"** reminder jo Dashboard pe dikhta hai) already kaam karta hai **bina iss setup ke bhi**. Push notification sirf ek extra layer hai.
+
+**Test kaise karo:** Deploy karne ke baad, app mein login karo (browser notification permission maangega, "Allow" karna), phir kisi ko task assign karo — unke phone/browser pe notification aani chahiye.

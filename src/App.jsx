@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
+import { subscribeToPush } from "./components.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Rooms from "./pages/Rooms.jsx";
@@ -16,6 +17,7 @@ import Inventory from "./pages/Inventory.jsx";
 import Maintenance from "./pages/Maintenance.jsx";
 import Activity from "./pages/Activity.jsx";
 import AddExpense from "./pages/AddExpense.jsx";
+import Backup from "./pages/Backup.jsx";
 import {
   listRooms,
   listGuests,
@@ -31,6 +33,7 @@ import {
   listMaintenanceTickets,
   listActivityLog,
   getMyProfile,
+  savePushSubscription,
   updateTask,
   updateBooking,
   updateRoom,
@@ -54,6 +57,7 @@ const OWNER_NAV = [
   { id: "finance", label: "Finance" },
   { id: "reports", label: "Reports" },
   { id: "activity", label: "Activity" },
+  { id: "backup", label: "Backup" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -92,6 +96,7 @@ export default function App() {
       return;
     }
     getMyProfile(session.user.id).then(({ data }) => setRole(data?.role || "staff"));
+    subscribeToPush(session.user.email, savePushSubscription);
   }, [session]);
 
   const reload = useCallback(async () => {
@@ -494,6 +499,7 @@ export default function App() {
               <Reports rooms={data.rooms} guests={data.guests} bookings={data.bookings} staff={data.staff} attendance={data.attendance} />
             )}
             {tab === "activity" && role === "owner" && <Activity log={data.activityLog} />}
+            {tab === "backup" && role === "owner" && <Backup data={data} />}
             {tab === "settings" && role === "owner" && <Settings />}
           </>
         )}

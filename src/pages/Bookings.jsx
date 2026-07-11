@@ -133,12 +133,26 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     setChangeRoomModal(null);
     reload();
   };
-  const saveDates = async (booking, { checkIn, checkOut }) => {
+  const saveBookingEdit = async (booking, { checkIn, checkOut, source, coGuestsCount, bookingRef, room }) => {
     const nights = nightsBetween(checkIn, checkOut);
-    const subtotal = booking.rate * nights;
+    const occupancy = 1 + (Number(coGuestsCount) || 0);
+    const rate = room ? computeRoomRate(room, occupancy) : booking.rate;
+    const subtotal = rate * nights;
     const discount = Math.min(booking.discount || 0, subtotal);
     const total = computeBookingTotal({ ...booking, subtotal, discount });
-    await updateBooking(booking.id, { check_in: checkIn, check_out: checkOut, nights, subtotal, discount, total });
+    await updateBooking(booking.id, {
+      check_in: checkIn,
+      check_out: checkOut,
+      nights,
+      rate,
+      subtotal,
+      discount,
+      total,
+      source,
+      co_guests_count: Number(coGuestsCount) || 0,
+      booking_ref: bookingRef.trim() || null,
+    });
+    logActivity("Booking edited", `${guestOf(booking.guest_id)?.name || "Guest"} — Room ${roomOf(booking.room_id)?.number || "—"}`);
     setEditModal(null);
     reload();
   };
@@ -261,7 +275,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
                 </Button>
                 {b.status !== "checked-out" && b.status !== "cancelled" && b.status !== "no-show" && (
                   <Button variant="ghost" onClick={() => setEditModal(b)}>
-                    Edit dates
+                    Edit booking
                   </Button>
                 )}
                 {b.status === "reserved" && <Button onClick={() => onOpenCheckIn(b)}>Check in</Button>}
@@ -298,11 +312,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         />
       )}
       {editModal && (
-        <EditDatesModal
+        <EditBookingModal
           booking={editModal}
           bookings={bookings}
+          rooms={rooms}
           onClose={() => setEditModal(null)}
-          onSave={(d) => saveDates(editModal, d)}
+          onSave={(d) => saveBookingEdit(editModal, d)}
         />
       )}
       {detailModal && (
@@ -709,16 +724,22 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   );
 }
 
-function EditDatesModal({ booking, bookings, onClose, onSave }) {
+function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
   const [checkIn, setCheckIn] = useState(booking.check_in);
   const [checkOut, setCheckOut] = useState(booking.check_out);
+  const [source, setSource] = useState(booking.source || BOOKING_SOURCES[0]);
+  const [coGuestsCount, setCoGuestsCount] = useState(booking.co_guests_count || 0);
+  const [bookingRef, setBookingRef] = useState(booking.booking_ref || "");
+  const room = rooms.find((r) => r.id === booking.room_id);
   const nights = nightsBetween(checkIn, checkOut);
-  const newSubtotal = booking.rate * nights;
+  const occupancy = 1 + (Number(coGuestsCount) || 0);
+  const newRate = room ? computeRoomRate(room, occupancy) : booking.rate;
+  const newSubtotal = newRate * nights;
   const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal });
   const available = isRoomAvailableForDates(booking.room_id, checkIn, checkOut, bookings, booking.id);
 
   return (
-    <Modal title="Edit stay dates" onClose={onClose} width={400}>
+    <Modal title="Edit booking" onClose={onClose} width={440}>
       <div className="grid-2">
         <Field label="Check-in">
           <input className="input" type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
@@ -726,9 +747,30 @@ function EditDatesModal({ booking, bookings, onClose, onSave }) {
         <Field label="Check-out">
           <input className="input" type="date" min={checkIn} value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
         </Field>
+        <Field label="Co-guests">
+          <input
+            className="input"
+            type="number"
+            min={0}
+            value={coGuestsCount}
+            onChange={(e) => setCoGuestsCount(Math.max(0, Number(e.target.value)))}
+          />
+        </Field>
+        <Field label="Booking source">
+          <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
+            {BOOKING_SOURCES.map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <Field label="Booking ID / reference">
+          <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} />
+        </Field>
       </div>
       <p style={{ fontSize: 13, marginTop: 14 }}>
-        {nights} nights · New total: <strong>{currency(newTotal)}</strong>
+        {nights} nights · {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(newRate)}</strong> · New total: <strong>{currency(newTotal)}</strong>
       </p>
       {checkIn < todayISO() && (
         <p style={{ fontSize: 12, color: "var(--brass)" }}>
@@ -748,7 +790,8 @@ function EditDatesModal({ booking, bookings, onClose, onSave }) {
           disabled={!available}
           onClick={() => {
             if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
-            onSave({ checkIn, checkOut });
+            if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
+            onSave({ checkIn, checkOut, source, coGuestsCount, bookingRef, room });
           }}
         >
           Save

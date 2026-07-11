@@ -291,6 +291,49 @@ export const HOUSEKEEPING_CHECKLIST = [
 export const MAINTENANCE_PRIORITIES = ["Low", "Medium", "High", "Urgent"];
 export const MAINTENANCE_STATUSES = ["Open", "In Progress", "Resolved"];
 
+// ---------- Push notifications ----------
+// Public key only — safe to be in client code (the private key stays a
+// server-side secret, used only by the send-push Edge Function).
+export const VAPID_PUBLIC_KEY = "BDNvyO732-JpdAt3J6MOqRuWIIj2svazkTwzz_ESGcCt7hrn1gVh2Y-fJRHVV8IX_gE4ws_XQ8nKvZELH9KpJOM";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+// Requests notification permission and subscribes this browser/device to
+// push — call once per login (e.g. on app load). Safe to call repeatedly;
+// browsers return the existing subscription if already subscribed.
+export async function subscribeToPush(userEmail, savePushSubscription) {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (Notification.permission === "denied") return;
+    if (Notification.permission === "default") {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return;
+    }
+    const registration = await navigator.serviceWorker.ready;
+    let sub = await registration.pushManager.getSubscription();
+    if (!sub) {
+      sub = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    const json = sub.toJSON();
+    await savePushSubscription({
+      user_email: userEmail,
+      endpoint: json.endpoint,
+      p256dh: json.keys.p256dh,
+      auth: json.keys.auth,
+    });
+  } catch (e) {
+    // Push isn't critical to the app working — fail silently (e.g. unsupported browser, permission denied later).
+  }
+}
+
 export const STATUS = {
   available: { label: "Available", color: "#5f8863" },
   occupied: { label: "Occupied", color: "#a6452f" },

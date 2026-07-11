@@ -10,6 +10,9 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
   const occupancy = rooms.length ? Math.round((occupied / rooms.length) * 100) : 0;
   const checkinsToday = bookings.filter((b) => b.check_in === today && b.status === "reserved");
   const checkoutsToday = bookings.filter((b) => b.check_out === today && b.status === "checked-in");
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const checkinsTomorrow = bookings.filter((b) => b.check_in === tomorrow && b.status === "reserved");
+  const checkoutsTomorrow = bookings.filter((b) => b.check_out === tomorrow && b.status === "checked-in");
   const monthPrefix = today.slice(0, 7);
   const revenueThisMonth = bookings
     .filter((b) => (b.check_in || "").startsWith(monthPrefix))
@@ -80,6 +83,35 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
           )
         )}
       </div>
+
+      {(checkinsTomorrow.length > 0 || checkoutsTomorrow.length > 0) && (
+        <>
+          <SectionTitle eyebrow="Reminder" title="Tomorrow's schedule" />
+          <div className="stat-grid" style={{ marginBottom: 20 }}>
+            <div className="stat-card">
+              <div className="label">Arriving tomorrow</div>
+              <div className="value">{checkinsTomorrow.length}</div>
+            </div>
+            <div className="stat-card">
+              <div className="label">Departing tomorrow</div>
+              <div className="value">{checkoutsTomorrow.length}</div>
+            </div>
+          </div>
+          {checkoutsTomorrow.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              {checkoutsTomorrow.map((b) => {
+                const g = guests.find((x) => x.id === b.guest_id);
+                const r = rooms.find((x) => x.id === b.room_id);
+                return (
+                  <div className="card" key={b.id} style={{ padding: "8px 14px" }}>
+                    <span style={{ fontSize: 13 }}>{g ? g.name : "Guest"} — Room {r ? r.number : "—"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
 
       {arrivalsModalOpen && (
         <ArrivalsModal
