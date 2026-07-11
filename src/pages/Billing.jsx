@@ -2,11 +2,12 @@ import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
-import { addPayment, updateBooking, getSettings, logActivity } from "../lib/api.js";
+import { addPayment, updatePayment, deletePayment, updateBooking, getSettings, logActivity } from "../lib/api.js";
 
-export default function Billing({ bookings, guests, rooms, inventoryUsage, reload }) {
+export default function Billing({ bookings, guests, rooms, inventoryUsage, role, reload }) {
   const [payModal, setPayModal] = useState(null);
   const [discountModal, setDiscountModal] = useState(null);
+  const [editPaymentModal, setEditPaymentModal] = useState(null);
   const [settings, setSettings] = useState(null);
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
@@ -16,11 +17,42 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
     getSettings().then(({ data }) => setSettings(data || {}));
   }, []);
 
-  const recordPayment = async (booking, amount, mode) => {
-    await addPayment({ booking_id: booking.id, amount, mode, paid_on: todayISO() });
-    const newPaid = Math.min(booking.total, (booking.paid_amount || 0) + amount);
+  // Supports one or more payment lines at once (e.g. guest pays part cash,
+  // part UPI, in a single collection) — each line becomes its own payment
+  // record so the mode breakdown stays accurate.
+  const recordPayment = async (booking, lines) => {
+    const total = lines.reduce((s, l) => s + l.amount, 0);
+    for (const line of lines) {
+      await addPayment({ booking_id: booking.id, amount: line.amount, mode: line.mode, paid_on: todayISO() });
+    }
+    const newPaid = Math.min(booking.total, (booking.paid_amount || 0) + total);
     await updateBooking(booking.id, { paid_amount: newPaid });
     setPayModal(null);
+    reload();
+  };
+
+  // Owner-only correction tools — recomputes paid_amount from the full
+  // payment list afterward so the booking total always stays accurate.
+  const saveEditedPayment = async (booking, payment, patch) => {
+    const { error } = await updatePayment(payment.id, patch);
+    if (error) return alert(`Couldn't update this payment: ${error.message}`);
+    const newPayments = (booking.payments || []).map((p) => (p.id === payment.id ? { ...p, ...patch } : p));
+    const newPaid = Math.min(booking.total, newPayments.reduce((s, p) => s + p.amount, 0));
+    await updateBooking(booking.id, { paid_amount: newPaid });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Payment corrected", `${g ? g.name : "Guest"}: ${currency(payment.amount)} → ${currency(patch.amount)} (${patch.mode})`);
+    setEditPaymentModal(null);
+    reload();
+  };
+  const removePayment = async (booking, payment) => {
+    if (!confirm(`Delete this payment entry (${currency(payment.amount)} · ${payment.mode})?`)) return;
+    const { error } = await deletePayment(payment.id);
+    if (error) return alert(`Couldn't delete this payment: ${error.message}`);
+    const remaining = (booking.payments || []).filter((p) => p.id !== payment.id);
+    const newPaid = remaining.reduce((s, p) => s + p.amount, 0);
+    await updateBooking(booking.id, { paid_amount: newPaid });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Payment deleted", `${g ? g.name : "Guest"}: ${currency(payment.amount)} · ${payment.mode}`);
     reload();
   };
 
@@ -137,7 +169,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
                 <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(b.paid_amount)}</span>
                 {b.deposit > 0 && (
                   <span style={{ fontSize: 11.5, color: depositStatus === "held" ? "var(--brass)" : "var(--ink45)" }}>
-                    Deposit {currency(b.deposit)} ({depositStatus})
+                    Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({depositStatus})
                   </span>
                 )}
                 <Pill color={balance <= 0 ? "#5f8863" : "#a6452f"}>{balance <= 0 ? "Settled" : `Due ${currency(balance)}`}</Pill>
@@ -182,10 +214,26 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
                 </div>
               )}
               {(b.payments || []).length > 0 && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
                   {b.payments.map((p) => (
-                    <span key={p.id} style={{ fontSize: 11.5, color: "var(--ink45)", fontFamily: "var(--font-mono)" }}>
+                    <span key={p.id} style={{ fontSize: 11.5, color: "var(--ink45)", fontFamily: "var(--font-mono)", display: "inline-flex", alignItems: "center", gap: 6 }}>
                       {currency(p.amount)} · {p.mode} · {fmtDate(p.paid_on)}
+                      {role === "owner" && (
+                        <>
+                          <button
+                            onClick={() => setEditPaymentModal({ booking: b, payment: p })}
+                            style={{ all: "unset", cursor: "pointer", color: "var(--brass)", fontSize: 11 }}
+                          >
+                            edit
+                          </button>
+                          <button
+                            onClick={() => removePayment(b, p)}
+                            style={{ all: "unset", cursor: "pointer", color: "var(--rust)", fontSize: 11 }}
+                          >
+                            delete
+                          </button>
+                        </>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -195,10 +243,17 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
         })
       )}
       {payModal && (
-        <PaymentModal booking={payModal} onClose={() => setPayModal(null)} onSave={(a, m) => recordPayment(payModal, a, m)} />
+        <PaymentModal booking={payModal} onClose={() => setPayModal(null)} onSave={(lines) => recordPayment(payModal, lines)} />
       )}
       {discountModal && (
         <DiscountModal booking={discountModal} onClose={() => setDiscountModal(null)} onSave={(d, r) => applyDiscount(discountModal, d, r)} />
+      )}
+      {editPaymentModal && (
+        <EditPaymentModal
+          payment={editPaymentModal.payment}
+          onClose={() => setEditPaymentModal(null)}
+          onSave={(patch) => saveEditedPayment(editPaymentModal.booking, editPaymentModal.payment, patch)}
+        />
       )}
     </div>
   );
@@ -236,23 +291,94 @@ function buildBillMessage(booking, guest, room, settings, items) {
 
 function PaymentModal({ booking, onClose, onSave }) {
   const balance = booking.total - booking.paid_amount;
-  const [amount, setAmount] = useState(balance);
-  const [mode, setMode] = useState(PAYMENT_MODES[0]);
+  const [lines, setLines] = useState([{ amount: balance, mode: PAYMENT_MODES[0] }]);
+  const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+
+  const updateLine = (i, patch) => setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  const addLine = () => setLines((prev) => [...prev, { amount: 0, mode: PAYMENT_MODES[0] }]);
+  const removeLine = (i) => setLines((prev) => prev.filter((_, idx) => idx !== i));
+
   return (
-    <Modal title="Record payment" onClose={onClose} width={380}>
+    <Modal title="Record payment" onClose={onClose} width={420}>
       <p style={{ fontSize: 13 }}>
         Balance due: <strong>{currency(balance)}</strong>
       </p>
+      <p style={{ fontSize: 11.5, color: "var(--ink45)", marginTop: -8 }}>
+        If the guest is paying part cash, part online, add a line for each — every mode gets tracked separately.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {lines.map((line, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <Field label={i === 0 ? "Amount" : ""}>
+              <input
+                className="input"
+                type="number"
+                value={line.amount}
+                onChange={(e) => updateLine(i, { amount: Number(e.target.value) })}
+              />
+            </Field>
+            <Field label={i === 0 ? "Mode" : ""}>
+              <select className="input" value={line.mode} onChange={(e) => updateLine(i, { mode: e.target.value })}>
+                {PAYMENT_MODES.map((m) => (
+                  <option key={m}>{m}</option>
+                ))}
+              </select>
+            </Field>
+            {lines.length > 1 && (
+              <button onClick={() => removeLine(i)} style={{ all: "unset", cursor: "pointer", color: "var(--rust)", padding: "8px 4px" }}>
+                ✕
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      <Button variant="ghost" onClick={addLine} style={{ marginTop: 10 }}>
+        + Add another mode (split payment)
+      </Button>
+      <div style={{ marginTop: 14, fontSize: 13 }}>
+        Total being recorded: <strong>{currency(total)}</strong>
+      </div>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => {
+            if (total <= 0) return alert("Enter an amount greater than zero.");
+            if (lines.some((l) => !l.amount || l.amount <= 0)) return alert("Every line needs an amount greater than zero.");
+            onSave(lines.map((l) => ({ amount: Number(l.amount), mode: l.mode })));
+          }}
+        >
+          Save payment
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+function EditPaymentModal({ payment, onClose, onSave }) {
+  const [amount, setAmount] = useState(payment.amount);
+  const [mode, setMode] = useState(payment.mode);
+  const [paidOn, setPaidOn] = useState(payment.paid_on);
+  return (
+    <Modal title="Correct payment entry" onClose={onClose} width={380}>
+      <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
+        Use this to fix a mistake (wrong amount or mode entered). The booking's paid total will be
+        recalculated automatically.
+      </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="Amount received">
+        <Field label="Amount">
           <input className="input" type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
         </Field>
-        <Field label="Payment mode">
+        <Field label="Mode">
           <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
             {PAYMENT_MODES.map((m) => (
               <option key={m}>{m}</option>
             ))}
           </select>
+        </Field>
+        <Field label="Date">
+          <input className="input" type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
         </Field>
       </div>
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -261,11 +387,11 @@ function PaymentModal({ booking, onClose, onSave }) {
         </Button>
         <Button
           onClick={() => {
-            if (amount <= 0) return alert("Enter an amount greater than zero.");
-            onSave(amount, mode);
+            if (!amount || amount <= 0) return alert("Enter a valid amount.");
+            onSave({ amount: Number(amount), mode, paid_on: paidOn });
           }}
         >
-          Save payment
+          Save correction
         </Button>
       </div>
     </Modal>

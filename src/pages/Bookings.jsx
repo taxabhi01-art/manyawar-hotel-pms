@@ -19,6 +19,7 @@ import {
   isLateCheckout,
   whatsappLink,
   BOOKING_SOURCES,
+  PAYMENT_MODES,
   BOOKING_STATUS_COLORS,
 } from "../components.jsx";
 import {
@@ -56,7 +57,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const guestOf = (id) => guests.find((g) => g.id === id);
   const bookableRooms = rooms.filter((r) => r.status !== "maintenance");
 
-  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, coGuestsCount, bookingRef }) => {
+  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, depositMode, coGuestsCount, bookingRef }) => {
     setBusy(true);
     let guestId = guest.id;
     let fullGuest = guest;
@@ -84,6 +85,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       paid_amount: 0,
       source: source || "Walk-in",
       deposit: deposit || 0,
+      deposit_mode: deposit > 0 ? depositMode || "Cash" : null,
       deposit_refunded: false,
       co_guests_count: coGuestsCount || 0,
       booking_ref: bookingRef || null,
@@ -235,7 +237,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
               )}
               {b.deposit > 0 && (
                 <span style={{ fontSize: 11.5, color: (b.deposit_status || "held") === "held" ? "var(--brass)" : "var(--ink45)" }}>
-                  Deposit {currency(b.deposit)} ({b.deposit_status || "held"})
+                  Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({b.deposit_status || "held"})
                 </span>
               )}
               {b.items_total > 0 && (
@@ -476,6 +478,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   const [checkOut, setCheckOut] = useState(todayISO());
   const [source, setSource] = useState(BOOKING_SOURCES[0]);
   const [deposit, setDeposit] = useState(0);
+  const [depositMode, setDepositMode] = useState(PAYMENT_MODES[0]);
   const [coGuestsCount, setCoGuestsCount] = useState(0);
   const [bookingRef, setBookingRef] = useState("");
 
@@ -530,6 +533,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
       checkOut,
       source,
       deposit: Number(deposit) || 0,
+      depositMode,
       coGuestsCount: Number(coGuestsCount) || 0,
       bookingRef: bookingRef.trim(),
     });
@@ -669,6 +673,17 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
           <input className="input" type="number" value={deposit} onChange={(e) => setDeposit(e.target.value)} />
         </Field>
       </div>
+      {Number(deposit) > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <Field label="Deposit paid via">
+            <select className="input" value={depositMode} onChange={(e) => setDepositMode(e.target.value)}>
+              {PAYMENT_MODES.map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      )}
       <div style={{ marginTop: 14 }}>
         <Field label="Booking ID / reference (required — shows on bill) *">
           <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} placeholder="e.g. your own ledger number, OTA ref" required />

@@ -386,3 +386,18 @@ Ab availability check mein **room ka live status bhi dekha jata hai** — agar k
 
 ### ⚠ Ek baar phir — purana data
 Room 201 wali double-booking (aman + sadhna) abhi bhi database mein hai — agar theek nahi kiya to abhi bhi confusing rahega. Dono mein se ek ko **Cancel** karo ya **Change room** se kisi aur khaali room mein shift karo.
+
+## UPDATE 15: Split payments, deposit mode, owner payment-correction
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v12.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye features:
+
+**1. Split payment (part cash, part online)** — "Record payment" mein ab **"+ Add another mode"** button hai — jitne bhi hisso mein guest pay kar raha hai (jaise ₹600 Cash + ₹400 UPI), sab ek hi jagah se ek saath record kar sakte ho. Har hissa alag payment entry banega, isliye mode-wise total (Finance tab) sahi rahega.
+
+**2. Deposit ka payment mode** — New booking banate waqt agar advance/deposit daalo, to ab ek naya field aayega — **"Deposit paid via"** (Cash/UPI/Bank/Card/Other). Ye Bookings aur Billing dono jagah dikhega.
+
+**3. Owner ke liye payment correction** — Agar kabhi galat amount ya galat mode record ho jaye, to **sirf owner login** ko har payment entry ke paas "**edit**" aur "**delete**" link dikhega (staff ko nahi dikhega). Edit karne se booking ka total paid amount **automatically sahi ho jata hai**, aur ye correction Activity log mein bhi record hoti hai.

@@ -456,7 +456,7 @@ export default function App() {
             )}
             {tab === "guests" && <Guests guests={data.guests} bookings={data.bookings} highlightId={highlightId} reload={reload} />}
             {tab === "billing" && (
-              <Billing bookings={data.bookings} guests={data.guests} rooms={data.rooms} inventoryUsage={data.inventoryUsage} reload={reload} />
+              <Billing bookings={data.bookings} guests={data.guests} rooms={data.rooms} inventoryUsage={data.inventoryUsage} role={role} reload={reload} />
             )}
             {tab === "inventory" && (
               <Inventory

@@ -46,6 +46,12 @@ export async function deleteBooking(id) {
 export async function addPayment(payment) {
   return supabase.from("payments").insert(payment).select().single();
 }
+export async function updatePayment(id, patch) {
+  return supabase.from("payments").update(patch).eq("id", id);
+}
+export async function deletePayment(id) {
+  return supabase.from("payments").delete().eq("id", id);
+}
 
 // ---------- STAFF ----------
 export async function listStaff() {
