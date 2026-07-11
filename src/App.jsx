@@ -268,7 +268,7 @@ export default function App() {
       <div className="sidebar">
         <h1>MANYAWAR HOTEL</h1>
 
-        <div style={{ marginTop: 18, position: "relative" }}>
+        <div className="global-search" style={{ marginTop: 18, position: "relative" }}>
           <input
             className="input"
             placeholder="Search guest, room, booking…"

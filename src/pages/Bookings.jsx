@@ -40,6 +40,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, highlightI
   const [detailModal, setDetailModal] = useState(null);
   const [confirmSendModal, setConfirmSendModal] = useState(null);
   const [cancelModal, setCancelModal] = useState(null);
+  const [changeRoomModal, setChangeRoomModal] = useState(null);
   const [filter, setFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -103,6 +104,30 @@ export default function Bookings({ rooms, guests, bookings, coGuests, highlightI
     const g = guestOf(b.guest_id);
     const r = roomOf(b.room_id);
     logActivity("Booking cancelled", `${g ? g.name : "Guest"} — Room ${r ? r.number : "—"}${reason ? ` (${reason})` : ""}`);
+    reload();
+  };
+
+  // Room changes after check-in — e.g. maintenance issue, guest request. Moves
+  // the booking to a new room, frees the old one, and optionally re-prices to
+  // the new room's tariff (kept as-is by default so the agreed price sticks).
+  const changeRoom = async ({ booking, newRoomId, updateRate }) => {
+    const oldRoom = roomOf(booking.room_id);
+    const newRoom = roomOf(newRoomId);
+    const patch = { room_id: newRoomId };
+    if (updateRate && newRoom) {
+      const occupancy = 1 + (booking.co_guests_count || 0);
+      const newRate = computeRoomRate(newRoom, occupancy);
+      const newSubtotal = newRate * booking.nights;
+      patch.rate = newRate;
+      patch.subtotal = newSubtotal;
+      patch.total = computeBookingTotal({ ...booking, subtotal: newSubtotal });
+    }
+    await updateBooking(booking.id, patch);
+    await updateRoom(booking.room_id, { status: "cleaning" });
+    await updateRoom(newRoomId, { status: "occupied" });
+    const g = guestOf(booking.guest_id);
+    logActivity("Room changed", `${g ? g.name : "Guest"}: Room ${oldRoom ? oldRoom.number : "—"} → ${newRoom ? newRoom.number : "—"}`);
+    setChangeRoomModal(null);
     reload();
   };
   const saveDates = async (booking, { checkIn, checkOut }) => {
@@ -238,6 +263,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, highlightI
                 )}
                 {b.status === "reserved" && <Button onClick={() => onOpenCheckIn(b)}>Check in</Button>}
                 {b.status === "checked-in" && (
+                  <Button variant="ghost" onClick={() => setChangeRoomModal(b)}>
+                    Change room
+                  </Button>
+                )}
+                {b.status === "checked-in" && (
                   <Button variant="dark" onClick={() => onOpenCheckOut(b)}>
                     Check out
                   </Button>
@@ -294,6 +324,17 @@ export default function Bookings({ rooms, guests, bookings, coGuests, highlightI
           }}
         />
       )}
+      {changeRoomModal && (
+        <ChangeRoomModal
+          booking={changeRoomModal}
+          guest={guestOf(changeRoomModal.guest_id)}
+          currentRoom={roomOf(changeRoomModal.room_id)}
+          allRooms={rooms}
+          bookings={bookings}
+          onClose={() => setChangeRoomModal(null)}
+          onConfirm={(payload) => changeRoom(payload)}
+        />
+      )}
     </div>
   );
 }
@@ -329,6 +370,58 @@ function CancelBookingModal({ booking, guest, room, onClose, onConfirm }) {
   );
 }
 
+// ---------------------------------------------------------------
+// CHANGE ROOM — move a checked-in guest to a different room (e.g.
+// maintenance issue, guest request). Frees the old room, occupies the new one.
+// ---------------------------------------------------------------
+function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, onClose, onConfirm }) {
+  const availableRooms = allRooms.filter(
+    (r) => r.id !== booking.room_id && r.status !== "maintenance" && isRoomAvailableForDates(r.id, booking.check_in, booking.check_out, bookings, booking.id)
+  );
+  const [newRoomId, setNewRoomId] = useState(availableRooms[0]?.id || "");
+  const [updateRate, setUpdateRate] = useState(false);
+  const newRoom = availableRooms.find((r) => r.id === newRoomId);
+
+  return (
+    <Modal title="Change room" onClose={onClose} width={420}>
+      <p style={{ fontSize: 13, marginTop: 0 }}>
+        Moving <strong>{guest ? guest.name : "this guest"}</strong> out of Room {currentRoom ? currentRoom.number : "—"}.
+      </p>
+      {availableRooms.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: "var(--rust)" }}>No other rooms are free for these dates right now.</p>
+      ) : (
+        <>
+          <Field label="Move to room">
+            <select className="input" value={newRoomId} onChange={(e) => setNewRoomId(e.target.value)}>
+              {availableRooms.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.number} · {r.type}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, marginTop: 12, color: "var(--ink70)" }}>
+            <input type="checkbox" checked={updateRate} onChange={(e) => setUpdateRate(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>
+              Update rate to the new room's tariff (
+              {newRoom ? currency(computeRoomRate(newRoom, 1 + (booking.co_guests_count || 0))) : "—"}/night). Leave unchecked to keep
+              the guest's originally agreed price.
+            </span>
+          </label>
+        </>
+      )}
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={!newRoomId} onClick={() => onConfirm({ booking, newRoomId, updateRate })}>
+          Move room
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 function WhatsAppConfirmModal({ info, onClose }) {
   const { guest, room, checkIn, checkOut, total } = info;
   const message = `Hi ${guest.name}, your booking at MANYAWAR HOTEL is confirmed!\nRoom: ${room?.number || ""} (${room?.type || ""})\nCheck-in: ${fmtDate(checkIn)}\nCheck-out: ${fmtDate(checkOut)}\nTotal: ${currency(total)}\n\nWe look forward to hosting you!`;
@@ -357,6 +450,7 @@ function WhatsAppConfirmModal({ info, onClose }) {
 function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
   const [guestMode, setGuestMode] = useState(guests.length ? "existing" : "new");
   const [existingId, setExistingId] = useState(guests[0]?.id || "");
+  const [guestSearch, setGuestSearch] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -430,15 +524,35 @@ function BookingModal({ allRooms, bookings, guests, onClose, onCreate, busy }) {
         guests.length === 0 ? (
           <p style={{ fontSize: 13 }}>No guests yet — switch to "New guest".</p>
         ) : (
-          <Field label="Guest">
-            <select className="input" value={existingId} onChange={(e) => setExistingId(e.target.value)}>
-              {guests.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <>
+            <Field label="Search guest">
+              <input
+                className="input"
+                value={guestSearch}
+                onChange={(e) => setGuestSearch(e.target.value)}
+                placeholder="Type a name or phone to filter…"
+              />
+            </Field>
+            <Field label="Guest">
+              {(() => {
+                const q = guestSearch.trim().toLowerCase();
+                const filteredGuests = q
+                  ? guests.filter((g) => g.name?.toLowerCase().includes(q) || (g.phone || "").includes(q))
+                  : guests;
+                return filteredGuests.length === 0 ? (
+                  <p style={{ fontSize: 12.5, color: "var(--ink45)", margin: "4px 0 0" }}>No guests match "{guestSearch}".</p>
+                ) : (
+                  <select className="input" value={existingId} onChange={(e) => setExistingId(e.target.value)}>
+                    {filteredGuests.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name} {g.phone ? `— ${g.phone}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                );
+              })()}
+            </Field>
+          </>
         )
       ) : (
         <div className="grid-2">

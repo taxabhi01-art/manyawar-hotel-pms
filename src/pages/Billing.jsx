@@ -8,6 +8,9 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
   const [payModal, setPayModal] = useState(null);
   const [discountModal, setDiscountModal] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [search, setSearch] = useState("");
+  const [periodFrom, setPeriodFrom] = useState("");
+  const [periodTo, setPeriodTo] = useState("");
 
   useEffect(() => {
     getSettings().then(({ data }) => setSettings(data || {}));
@@ -51,8 +54,28 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
     reload();
   };
 
-  const sorted = bookings.slice().sort((a, b) => (a.check_in < b.check_in ? 1 : -1));
+  const sorted = bookings
+    .slice()
+    .sort((a, b) => (a.check_in < b.check_in ? 1 : -1))
+    .filter((b) => {
+      if (periodFrom && b.check_in < periodFrom) return false;
+      if (periodTo && b.check_in > periodTo) return false;
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      const g = guests.find((x) => x.id === b.guest_id);
+      const r = rooms.find((x) => x.id === b.room_id);
+      return (
+        (g?.name || "").toLowerCase().includes(q) ||
+        (g?.phone || "").includes(q) ||
+        (r?.number || "").toLowerCase().includes(q) ||
+        (b.booking_ref || "").toLowerCase().includes(q)
+      );
+    });
   const totalOutstanding = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
+  const periodPreset = (fromDaysAgo, toDaysAgo = 0) => {
+    setPeriodFrom(new Date(Date.now() - fromDaysAgo * 86400000).toISOString().slice(0, 10));
+    setPeriodTo(new Date(Date.now() - toDaysAgo * 86400000).toISOString().slice(0, 10));
+  };
 
   return (
     <div>
@@ -65,8 +88,27 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, reloa
           </div>
         }
       />
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <Field label="Search guest, room, or ref">
+          <input className="input" style={{ width: 220 }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" />
+        </Field>
+        <Button variant="ghost" onClick={() => periodPreset(0, 0)}>Today</Button>
+        <Button variant="ghost" onClick={() => periodPreset(6, 0)}>Last 7 days</Button>
+        <Button variant="ghost" onClick={() => periodPreset(29, 0)}>Last 30 days</Button>
+        <Field label="From">
+          <input className="input" type="date" style={{ width: 140 }} value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)} />
+        </Field>
+        <Field label="To">
+          <input className="input" type="date" style={{ width: 140 }} value={periodTo} onChange={(e) => setPeriodTo(e.target.value)} />
+        </Field>
+        {(periodFrom || periodTo || search) && (
+          <Button variant="ghost" onClick={() => { setPeriodFrom(""); setPeriodTo(""); setSearch(""); }}>
+            Clear
+          </Button>
+        )}
+      </div>
       {sorted.length === 0 ? (
-        <EmptyState text="No invoices yet — they appear once a booking is created." />
+        <EmptyState text={bookings.length === 0 ? "No invoices yet — they appear once a booking is created." : "No bookings match your search/filter."} />
       ) : (
         sorted.map((b) => {
           const g = guests.find((x) => x.id === b.guest_id);

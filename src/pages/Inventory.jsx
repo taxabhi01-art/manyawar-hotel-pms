@@ -31,15 +31,16 @@ export default function Inventory({ items, usage, bookings, guests, rooms, reloa
     reload();
   };
 
-  const logUsage = async ({ bookingId, item, quantity }) => {
+  const logUsage = async ({ bookingId, item, quantity, note }) => {
     const amount = item.price * quantity;
     const { error: usageError } = await addInventoryUsage({
-      booking_id: bookingId,
+      booking_id: bookingId || null,
       item_id: item.id,
       item_name: item.name,
       quantity,
       unit_price: item.price,
       amount,
+      note: note || null,
     });
     if (usageError) return alert(`Couldn't log this usage: ${usageError.message}`);
 
@@ -47,12 +48,16 @@ export default function Inventory({ items, usage, bookings, guests, rooms, reloa
     const newStock = Math.max(0, (item.stock_qty || 0) - quantity);
     await updateInventoryItem(item.id, { stock_qty: newStock });
 
-    // Auto-add to the guest's bill
-    const booking = bookings.find((b) => b.id === bookingId);
-    if (booking) {
-      const newItemsTotal = (booking.items_total || 0) + amount;
-      const newTotal = computeBookingTotal({ ...booking, items_total: newItemsTotal });
-      await updateBooking(bookingId, { items_total: newItemsTotal, total: newTotal });
+    // Auto-add to the guest's bill — only when this was actually used by a guest
+    if (bookingId) {
+      const booking = bookings.find((b) => b.id === bookingId);
+      if (booking) {
+        const newItemsTotal = (booking.items_total || 0) + amount;
+        const newTotal = computeBookingTotal({ ...booking, items_total: newItemsTotal });
+        await updateBooking(bookingId, { items_total: newItemsTotal, total: newTotal });
+      }
+    } else {
+      logActivity("Inventory self-use logged", `${item.name} ×${quantity} (${currency(amount)})${note ? ` — ${note}` : ""}`);
     }
     setUseModal(false);
     reload();
@@ -86,7 +91,7 @@ export default function Inventory({ items, usage, bookings, guests, rooms, reloa
         title="Inventory"
         action={
           <div style={{ display: "flex", gap: 8 }}>
-            {activeBookings.length > 0 && items.length > 0 && <Button onClick={() => setUseModal(true)}>Log item used</Button>}
+            {items.length > 0 && <Button onClick={() => setUseModal(true)}>Log item used</Button>}
             <Button variant="ghost" onClick={() => setItemModal("new")}>
               + Add item
             </Button>
@@ -120,7 +125,7 @@ export default function Inventory({ items, usage, bookings, guests, rooms, reloa
 
       <SectionTitle eyebrow="Log" title="Recent usage" />
       {recentUsage.length === 0 ? (
-        <p style={{ fontSize: 13, color: "var(--ink45)" }}>No items logged against any guest yet.</p>
+        <p style={{ fontSize: 13, color: "var(--ink45)" }}>No items logged yet.</p>
       ) : (
         recentUsage.map((u) => {
           const booking = bookings.find((b) => b.id === u.booking_id);
@@ -131,11 +136,13 @@ export default function Inventory({ items, usage, bookings, guests, rooms, reloa
               <span style={{ fontSize: 12.5, color: "var(--ink45)", width: 130 }}>{fmtDateTime(u.used_at)}</span>
               <span style={{ flex: 1, fontSize: 13 }}>
                 {u.item_name} ×{u.quantity}
-                {guest && (
+                {guest ? (
                   <span style={{ color: "var(--ink45)" }}>
                     {" "}
                     — {guest.name} (Room {room ? room.number : "—"})
                   </span>
+                ) : (
+                  <span style={{ color: "var(--brass)" }}> — Self-use / internal{u.note ? ` (${u.note})` : ""}</span>
                 )}
               </span>
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--brass)" }}>{currency(u.amount)}</span>
@@ -206,9 +213,11 @@ function ItemModal({ item, onClose, onSave }) {
 }
 
 function UseItemModal({ items, bookings, guests, rooms, onClose, onSave }) {
+  const [mode, setMode] = useState(bookings.length > 0 ? "guest" : "self"); // guest | self
   const [bookingId, setBookingId] = useState(bookings[0]?.id || "");
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [quantity, setQuantity] = useState(1);
+  const [note, setNote] = useState("");
 
   const item = items.find((i) => i.id === itemId);
   const amount = item ? item.price * quantity : 0;
@@ -221,16 +230,34 @@ function UseItemModal({ items, bookings, guests, rooms, onClose, onSave }) {
 
   return (
     <Modal title="Log item used" onClose={onClose} width={420}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <Button variant={mode === "guest" ? "primary" : "ghost"} onClick={() => setMode("guest")}>
+          For a guest
+        </Button>
+        <Button variant={mode === "self" ? "primary" : "ghost"} onClick={() => setMode("self")}>
+          Self-use / internal
+        </Button>
+      </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="Guest / booking">
-          <select className="input" value={bookingId} onChange={(e) => setBookingId(e.target.value)}>
-            {bookings.map((b) => (
-              <option key={b.id} value={b.id}>
-                {bookingLabel(b)}
-              </option>
-            ))}
-          </select>
-        </Field>
+        {mode === "guest" ? (
+          bookings.length === 0 ? (
+            <p style={{ fontSize: 12.5, color: "var(--rust)" }}>No active (reserved/checked-in) bookings right now. Use "Self-use / internal" instead.</p>
+          ) : (
+            <Field label="Guest / booking">
+              <select className="input" value={bookingId} onChange={(e) => setBookingId(e.target.value)}>
+                {bookings.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {bookingLabel(b)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )
+        ) : (
+          <Field label="Note (optional — e.g. staff name or reason)">
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Used for lobby restock" />
+          </Field>
+        )}
         <Field label="Item">
           <select className="input" value={itemId} onChange={(e) => setItemId(e.target.value)}>
             {items.map((i) => (
@@ -245,7 +272,15 @@ function UseItemModal({ items, bookings, guests, rooms, onClose, onSave }) {
         </Field>
         {item && (
           <div style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "8px 12px", fontSize: 13 }}>
-            Amount to add to bill: <strong>{currency(amount)}</strong>
+            {mode === "guest" ? (
+              <>
+                Amount to add to bill: <strong>{currency(amount)}</strong>
+              </>
+            ) : (
+              <>
+                Stock value used: <strong>{currency(amount)}</strong> (not billed to any guest)
+              </>
+            )}
             {quantity > item.stock_qty && (
               <div style={{ color: "var(--rust)", fontSize: 11.5, marginTop: 4 }}>⚠ Only {item.stock_qty} in stock — this will go negative.</div>
             )}
@@ -258,12 +293,12 @@ function UseItemModal({ items, bookings, guests, rooms, onClose, onSave }) {
         </Button>
         <Button
           onClick={() => {
-            if (!bookingId) return alert("Select a guest/booking.");
+            if (mode === "guest" && !bookingId) return alert("Select a guest/booking.");
             if (!item) return alert("Select an item.");
-            onSave({ bookingId, item, quantity });
+            onSave({ bookingId: mode === "guest" ? bookingId : null, item, quantity, note: mode === "self" ? note.trim() : "" });
           }}
         >
-          Add to bill
+          {mode === "guest" ? "Add to bill" : "Log usage"}
         </Button>
       </div>
     </Modal>

@@ -128,6 +128,7 @@ Migrations is order mein chalayi gayi hain (sab already run ho chuki hain live p
 9. `supabase-schema-v9.sql` — `night_audits.early_checkins` / `late_checkouts` counts
 10. `supabase-schema-v10.sql` — `activity_log` table, `maintenance_tickets` table,
     `night_audits.details` (jsonb full-detail snapshot)
+11. `supabase-schema-v11.sql` — `inventory_usage.note` (for self-use/internal entries)
 
 Agar future mein koi naya SQL change ho, isi pattern mein `supabase-schema-v5.sql` banega —
 additive rehta hai (purana kabhi nahi todta), `create table if not exists` /

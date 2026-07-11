@@ -330,3 +330,22 @@ Supabase → SQL Editor → `supabase-schema-v10.sql` Run karo.
 **5. Finance cash-flow mein date range** — Ab "Today" fix nahi hai — From/To date daal sakte ho, ya "Today"/"Yesterday"/"Last 7 days"/"Last 30 days" quick-buttons use kar sakte ho, jo bhi period dekhna hai.
 
 **6. Night Audit ab poori tarah detailed hai** — Sirf counts nahi, ab poori list dikhti hai: sab arrivals/departures naam ke saath, early check-in/late checkout kisne kiye (fee ke saath), revenue payment-mode ke hisaab se, expenses category ke hisaab se. History mein bhi har purani date ke liye **"View details"** button hai jo us din ka poora record dikhata hai (jaisa audit run karte waqt tha).
+
+## UPDATE 12: Room change, Billing search, guest search, Inventory bug-fix, mobile fix
+
+### Step A — Naya SQL run karo
+Supabase → SQL Editor → `supabase-schema-v11.sql` Run karo.
+
+### Step B — GitHub pe naya code upload karo
+
+### Naye/badle features:
+
+**1. Check-in ke baad room change** — Checked-in booking pe ab **"Change room"** button hai. Naya (khaali) room choose karo — agar naye room ka rate alag hai to ek checkbox se decide kar sakte ho ki guest ka **purana agreed rate rakhna hai ya naye room ke hisaab se update karna hai** (default: purana rate rehta hai). Purana room automatically "cleaning" mein chala jata hai, naya "occupied" ho jata hai.
+
+**2. Billing mein search + period filter** — Ab Billing tab mein guest naam/room/booking-ref se search kar sakte ho, aur "Today"/"Last 7 days"/"Last 30 days" ya custom date-range se filter kar sakte ho.
+
+**3. New booking mein existing-guest search** — Booking banate waqt "Existing guest" choose karne par ab ek **search box** hai — naam ya phone type karo, list turant filter ho jayegi (bade guest-list ke saath dhoondna aasan ho gaya).
+
+**4. Inventory ka bug fix ho gaya** — Asli wajah: "Log item used" button **sirf tab dikhta tha jab koi active booking ho** — agar koi guest currently reserved/checked-in nahi tha, to button hi gayab ho jata tha! Ab button **hamesha dikhega**. Saath hi ek naya option add kiya — **"Self-use / internal"** — jab item kisi guest ko nahi, khud staff ke istemal ke liye ya kisi aur wajah se nikala ho, to bina kisi booking ke bhi log kar sakte ho (stock kam hoga, lekin kisi guest ke bill mein nahi jayega).
+
+**5. Mobile mein search bar ka layout fix** — Phone pe ab search bar apni **alag row** mein hai (sabse neeche), isliye Dashboard/Bookings jaise nav options ab hide nahi honge — sab dikhenge aur scroll kar sakte ho.
