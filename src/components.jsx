@@ -306,6 +306,33 @@ function urlBase64ToUint8Array(base64String) {
 // Requests notification permission and subscribes this browser/device to
 // push — call once per login (e.g. on app load). Safe to call repeatedly;
 // browsers return the existing subscription if already subscribed.
+// Plays a short two-tone "ding-dong" bell sound (like a chat app notification)
+// using the Web Audio API — no audio file needed. Call this when a push
+// notification arrives while the app is already open (foreground).
+export function playNotificationBell() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ding = (freq, startTime, duration) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, startTime);
+      gain.gain.setValueAtTime(0.001, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.25, startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
+    const now = ctx.currentTime;
+    ding(988, now, 0.35); // B5
+    ding(1319, now + 0.15, 0.4); // E6 — classic two-note "ding-dong"
+  } catch (e) {
+    // Some browsers block audio until the user has interacted with the page — safe to ignore.
+  }
+}
+
 export async function subscribeToPush(userEmail, savePushSubscription) {
   try {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;

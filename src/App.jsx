@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
-import { subscribeToPush } from "./components.jsx";
+import { subscribeToPush, playNotificationBell } from "./components.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Rooms from "./pages/Rooms.jsx";
@@ -18,6 +18,7 @@ import Maintenance from "./pages/Maintenance.jsx";
 import Activity from "./pages/Activity.jsx";
 import AddExpense from "./pages/AddExpense.jsx";
 import Backup from "./pages/Backup.jsx";
+import GuestReport from "./pages/GuestReport.jsx";
 import {
   listRooms,
   listGuests,
@@ -98,6 +99,17 @@ export default function App() {
     getMyProfile(session.user.id).then(({ data }) => setRole(data?.role || "staff"));
     subscribeToPush(session.user.email, savePushSubscription);
   }, [session]);
+
+  // Play a bell sound when a push notification arrives while the app is
+  // already open — the OS notification sound only plays when unfocused.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const handler = (event) => {
+      if (event.data?.type === "PUSH_RECEIVED") playNotificationBell();
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, []);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -266,6 +278,12 @@ export default function App() {
     setSearchQuery("");
     setTimeout(() => setHighlightId(null), 4000);
   };
+
+  // Public route — guest scans a room QR code, no login needed at all.
+  const reportRoom = new URLSearchParams(window.location.search).get("report");
+  if (reportRoom) {
+    return <GuestReport roomNumber={reportRoom} />;
+  }
 
   if (session === undefined) {
     return <div className="login-shell" style={{ color: "#fff" }}>Loading…</div>;

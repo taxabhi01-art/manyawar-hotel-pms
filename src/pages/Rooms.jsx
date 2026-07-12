@@ -4,6 +4,7 @@ import { addRoom, updateRoom, deleteRoom } from "../lib/api.js";
 
 export default function Rooms({ rooms, bookings, highlightId, reload }) {
   const [modal, setModal] = useState(null);
+  const [qrModal, setQrModal] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -43,7 +44,14 @@ export default function Rooms({ rooms, bookings, highlightId, reload }) {
       <SectionTitle
         eyebrow="Inventory"
         title="Rooms"
-        action={<Button onClick={() => setModal("new")}>+ Add room</Button>}
+        action={
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button variant="ghost" onClick={() => setQrModal(true)}>
+              🏷 Print QR codes
+            </Button>
+            <Button onClick={() => setModal("new")}>+ Add room</Button>
+          </div>
+        }
       />
       {rooms.length === 0 ? (
         <EmptyState text="No rooms added yet." action={<Button onClick={() => setModal("new")}>Add your first room</Button>} />
@@ -76,7 +84,50 @@ export default function Rooms({ rooms, bookings, highlightId, reload }) {
         ))
       )}
       {modal && <RoomModal room={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={saveRoom} busy={busy} />}
+      {qrModal && <QrCodesModal rooms={rooms} onClose={() => setQrModal(false)} />}
     </div>
+  );
+}
+
+function QrCodesModal({ rooms, onClose }) {
+  const baseUrl = `${window.location.origin}${window.location.pathname}`;
+  return (
+    <Modal title="Room QR codes — guests scan to report issues" onClose={onClose} width={720}>
+      <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: -6, marginBottom: 16 }}>
+        Print these and stick one in each room. Guests scan with their phone camera — no app or login
+        needed — and their issue goes straight into Maintenance with a notification to staff.
+      </p>
+      <div id="qr-print-area" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+        {rooms.map((r) => {
+          const reportUrl = `${baseUrl}?report=${encodeURIComponent(r.number)}`;
+          const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(reportUrl)}`;
+          return (
+            <div key={r.id} style={{ textAlign: "center", border: "1px solid var(--hairline)", borderRadius: 8, padding: 12 }}>
+              <img src={qrImg} alt={`QR for Room ${r.number}`} style={{ width: "100%", maxWidth: 160 }} />
+              <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, marginTop: 6 }}>Room {r.number}</div>
+              <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>Scan to report an issue</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+        <Button
+          onClick={() => {
+            const printContents = document.getElementById("qr-print-area").outerHTML;
+            const w = window.open("", "_blank");
+            w.document.write(`<html><head><title>Room QR Codes</title></head><body>${printContents}</body></html>`);
+            w.document.close();
+            w.focus();
+            setTimeout(() => w.print(), 300);
+          }}
+        >
+          Print all
+        </Button>
+      </div>
+    </Modal>
   );
 }
 

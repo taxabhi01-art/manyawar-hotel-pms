@@ -25,12 +25,19 @@ self.addEventListener("push", (event) => {
     if (event.data) payload = { ...payload, ...event.data.json() };
   } catch (e) {}
   event.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body,
-      icon: "/icons/icon-192.png",
-      badge: "/icons/icon-192.png",
-      data: { url: payload.url || "/" },
-    })
+    (async () => {
+      await self.registration.showNotification(payload.title, {
+        body: payload.body,
+        icon: "/icons/icon-192.png",
+        badge: "/icons/icon-192.png",
+        data: { url: payload.url || "/" },
+      });
+      // Tell any open tabs a push just arrived, so they can play a bell
+      // sound too — the OS notification itself only makes its own sound
+      // when the tab/app isn't already focused.
+      const clientsList = await self.clients.matchAll({ type: "window" });
+      clientsList.forEach((client) => client.postMessage({ type: "PUSH_RECEIVED" }));
+    })()
   );
 });
 
