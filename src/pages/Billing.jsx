@@ -4,7 +4,7 @@ import autoTable from "jspdf-autotable";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
 import { addPayment, updatePayment, deletePayment, updateBooking, getSettings, logActivity } from "../lib/api.js";
 
-export default function Billing({ bookings, guests, rooms, inventoryUsage, role, reload }) {
+export default function Billing({ bookings, guests, rooms, inventoryUsage, role, autoOpenPaymentFor, reload }) {
   const [payModal, setPayModal] = useState(null);
   const [discountModal, setDiscountModal] = useState(null);
   const [editPaymentModal, setEditPaymentModal] = useState(null);
@@ -16,6 +16,16 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
   useEffect(() => {
     getSettings().then(({ data }) => setSettings(data || {}));
   }, []);
+
+  // Coming here right after checkout with a pending balance — jump straight
+  // to "Record payment" for that booking instead of making staff hunt for it.
+  useEffect(() => {
+    if (autoOpenPaymentFor) {
+      const b = bookings.find((x) => x.id === autoOpenPaymentFor);
+      if (b && b.total - b.paid_amount > 0) setPayModal(b);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenPaymentFor]);
 
   // Supports one or more payment lines at once (e.g. guest pays part cash,
   // part UPI, in a single collection) — each line becomes its own payment
@@ -544,26 +554,49 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   doc.setTextColor(balance > 0 ? 166 : 95, balance > 0 ? 69 : 136, balance > 0 ? 47 : 99);
   doc.text(balance > 0 ? "Balance due" : "Fully paid", 120, y);
   doc.text(pdfMoney(Math.max(0, balance)), 196, y, { align: "right" });
-  y += 14;
+  y += 12;
 
   if (booking.deposit > 0) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(...BRASS);
     const status = booking.deposit_status || (booking.deposit_refunded ? "refunded" : "held");
-    doc.text(`Advance/deposit collected: ${pdfMoney(booking.deposit)} (${status})`, 14, y);
+    doc.text(`Advance/deposit collected: ${pdfMoney(booking.deposit)} via ${booking.deposit_mode || "Cash"} (${status})`, 14, y);
     y += 10;
   }
 
+  // Payment trail — every payment with its date and mode, not just the total
+  if ((booking.payments || []).length > 0) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...NAVY);
+    doc.text("Payment history", 14, y);
+    y += 4;
+    autoTable(doc, {
+      startY: y,
+      head: [["Date", "Mode", "Amount"]],
+      body: booking.payments.map((p) => [fmtDate(p.paid_on), p.mode, pdfMoney(p.amount)]),
+      theme: "striped",
+      styles: { fontSize: 8.5 },
+      margin: { left: 14, right: 14 },
+      tableWidth: 100,
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  if (y > 260) {
+    doc.addPage();
+    y = 20;
+  }
   doc.setDrawColor(220, 220, 220);
-  doc.line(14, 275, 196, 275);
+  doc.line(14, y + 6, 196, y + 6);
   doc.setFont("helvetica", "italic");
   doc.setFontSize(9);
   doc.setTextColor(120, 120, 120);
-  doc.text("Thank you for staying with us.", 14, 281);
+  doc.text("Thank you for staying with us. We hope to welcome you again soon!", 14, y + 12);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
-  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, 281, { align: "right" });
+  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y + 12, { align: "right" });
 
   doc.save(`invoice_${(guest?.name || "guest").replace(/\s+/g, "_")}_${booking.check_in}.pdf`);
 }

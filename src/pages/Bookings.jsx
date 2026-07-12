@@ -523,6 +523,29 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
     if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
     if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
     if (!roomId) return alert("No room is available for these dates. Try a different date range.");
+
+    // Duplicate-booking guard: same ref ID, or same guest name + same dates.
+    const activeBookings = bookings.filter((b) => b.status !== "cancelled");
+    const refDupe = activeBookings.find((b) => b.booking_ref && b.booking_ref.trim().toLowerCase() === bookingRef.trim().toLowerCase());
+    if (refDupe) {
+      const g = guests.find((x) => x.id === refDupe.guest_id);
+      return alert(
+        `⚠ This booking ID / reference is already used by an existing booking (${g ? g.name : "Guest"}, ${refDupe.check_in} → ${refDupe.check_out}).\n\nUse a different reference, or cancel that booking first.`
+      );
+    }
+    const candidateName = (guestMode === "existing" ? guests.find((g) => g.id === existingId)?.name : name.trim())?.toLowerCase();
+    const nameDateDupe = candidateName
+      ? activeBookings.find((b) => {
+          const g = guests.find((x) => x.id === b.guest_id);
+          return g?.name?.toLowerCase() === candidateName && b.check_in === checkIn && b.check_out === checkOut;
+        })
+      : null;
+    if (nameDateDupe) {
+      return alert(
+        `⚠ ${candidateName} already has a booking for these exact same dates (${checkIn} → ${checkOut}, Ref: ${nameDateDupe.booking_ref || "—"}).\n\nThis looks like a duplicate — check Bookings tab, or cancel the old one first if this is a genuine correction.`
+      );
+    }
+
     if (activeTicket) {
       const proceed = confirm(
         `⚠ Room ${selectedRoom?.number || ""} has an open maintenance issue:\n\n"${activeTicket.issue}" (Priority: ${activeTicket.priority}, Status: ${activeTicket.status})\n\nBook this room anyway?`

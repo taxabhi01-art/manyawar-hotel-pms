@@ -1,10 +1,13 @@
 import React, { useState, useMemo } from "react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES, PAYMENT_MODES } from "../components.jsx";
-import { addExpense, updateExpense, deleteExpense, addStaff, logActivity } from "../lib/api.js";
+import { addExpense, updateExpense, deleteExpense, addStaff, logActivity, uploadExpenseReceipt, getExpenseReceiptSignedUrl } from "../lib/api.js";
 
-export default function Finance({ bookings, expenses, staff, reload }) {
+export default function Finance({ bookings, guests, expenses, staff, reload }) {
   const [expenseModal, setExpenseModal] = useState(null);
+  const [modeModal, setModeModal] = useState(null); // "Cash" | "UPI" | "Other" | null
   const [granularity, setGranularity] = useState("monthly"); // daily | monthly | yearly
   const [monthsBack, setMonthsBack] = useState(6);
   const today = todayISO();
@@ -13,7 +16,7 @@ export default function Finance({ bookings, expenses, staff, reload }) {
 
   const allPayments = useMemo(() => {
     const rows = [];
-    bookings.forEach((b) => (b.payments || []).forEach((p) => rows.push(p)));
+    bookings.forEach((b) => (b.payments || []).forEach((p) => rows.push({ ...p, booking_id: b.id })));
     return rows;
   }, [bookings]);
 
@@ -142,20 +145,20 @@ export default function Finance({ bookings, expenses, staff, reload }) {
         }
       />
       <div className="stat-grid" style={{ marginBottom: 12 }}>
-        <div className="stat-card">
+        <div className="stat-card" style={{ cursor: "pointer" }} onClick={() => setModeModal("Cash")}>
           <div className="label">Cash received</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(cashInRange)}</div>
-          <div className="sub">Spent: {currency(cashExpenseInRange)}</div>
+          <div className="sub">Spent: {currency(cashExpenseInRange)} · click to view all</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card" style={{ cursor: "pointer" }} onClick={() => setModeModal("UPI")}>
           <div className="label">UPI received</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(upiInRange)}</div>
-          <div className="sub">Spent: {currency(upiExpenseInRange)}</div>
+          <div className="sub">Spent: {currency(upiExpenseInRange)} · click to view all</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card" style={{ cursor: "pointer" }} onClick={() => setModeModal("Other")}>
           <div className="label">Other (Bank/Card)</div>
           <div className="value" style={{ color: "var(--sage)" }}>{currency(otherModesInRange)}</div>
-          <div className="sub">Spent: {currency(otherExpenseInRange)}</div>
+          <div className="sub">Spent: {currency(otherExpenseInRange)} · click to view all</div>
         </div>
         <div className="stat-card">
           <div className="label">Total received</div>
@@ -291,6 +294,18 @@ export default function Finance({ bookings, expenses, staff, reload }) {
               </span>
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--rust)" }}>{currency(e.amount)}</span>
               <div style={{ display: "flex", gap: 6 }}>
+                {e.receipt_path && (
+                  <Button
+                    variant="ghost"
+                    onClick={async () => {
+                      const { data, error } = await getExpenseReceiptSignedUrl(e.receipt_path);
+                      if (error) return alert(`Couldn't open document: ${error.message}`);
+                      window.open(data.signedUrl, "_blank");
+                    }}
+                  >
+                    📎 Doc
+                  </Button>
+                )}
                 <Button variant="ghost" onClick={() => setExpenseModal(e)}>
                   Edit
                 </Button>
@@ -311,7 +326,74 @@ export default function Finance({ bookings, expenses, staff, reload }) {
           onSave={saveExpense}
         />
       )}
+      {modeModal && (
+        <ModeDrillDownModal
+          mode={modeModal}
+          payments={rangePayments.filter((p) => (modeModal === "Other" ? p.mode !== "Cash" && p.mode !== "UPI" : p.mode === modeModal))}
+          bookings={bookings}
+          guests={guests}
+          cfStart={cfStart}
+          cfEnd={cfEnd}
+          onClose={() => setModeModal(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function ModeDrillDownModal({ mode, payments, bookings, guests, cfStart, cfEnd, onClose }) {
+  const rows = payments
+    .map((p) => {
+      const b = bookings.find((x) => x.id === p.booking_id);
+      const g = b ? guests.find((x) => x.id === b.guest_id) : null;
+      return { ...p, guestName: g ? g.name : "—", bookingRef: b ? b.booking_ref : "—" };
+    })
+    .sort((a, b) => (a.paid_on < b.paid_on ? 1 : -1));
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+
+  const downloadPdf = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(14);
+    doc.text(`${mode} payments — ${fmtDate(cfStart)} to ${fmtDate(cfEnd)}`, 14, 16);
+    autoTable(doc, {
+      startY: 22,
+      head: [["Date", "Guest", "Booking Ref", "Amount"]],
+      body: rows.map((r) => [fmtDate(r.paid_on), r.guestName, r.bookingRef, currency(r.amount)]),
+      foot: [["", "", "Total", currency(total)]],
+    });
+    doc.save(`${mode.toLowerCase()}-payments-${cfStart}-to-${cfEnd}.pdf`);
+  };
+
+  return (
+    <Modal title={`${mode} payments (${fmtDate(cfStart)} → ${fmtDate(cfEnd)})`} onClose={onClose} width={480}>
+      {rows.length === 0 ? (
+        <EmptyState text="No payments in this range." />
+      ) : (
+        <div style={{ maxHeight: 360, overflowY: "auto" }}>
+          {rows.map((r) => (
+            <div key={r.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--hairline)", fontSize: 13 }}>
+              <span>
+                {fmtDate(r.paid_on)} · {r.guestName} <span style={{ color: "var(--ink45)" }}>({r.bookingRef})</span>
+              </span>
+              <strong>{currency(r.amount)}</strong>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", fontSize: 14 }}>
+            <strong>Total</strong>
+            <strong>{currency(total)}</strong>
+          </div>
+        </div>
+      )}
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={() => window.print()}>
+          Print
+        </Button>
+        <Button onClick={downloadPdf}>Download PDF</Button>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -323,7 +405,24 @@ export function ExpenseModal({ expense, staff, onClose, onSave }) {
   const [newStaffName, setNewStaffName] = useState("");
   const [newStaffPhone, setNewStaffPhone] = useState("");
   const [creatingStaff, setCreatingStaff] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const isSalary = form.category === "Salaries";
+
+  const uploadReceipt = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    const path = `receipts/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+    const { error } = await uploadExpenseReceipt(path, file);
+    setUploading(false);
+    if (error) return alert(`Couldn't upload receipt: ${error.message}`);
+    setForm({ ...form, receipt_path: path });
+  };
+
+  const viewReceipt = async () => {
+    const { data, error } = await getExpenseReceiptSignedUrl(form.receipt_path);
+    if (error) return alert(`Couldn't open receipt: ${error.message}`);
+    window.open(data.signedUrl, "_blank");
+  };
 
   const createStaffInline = async () => {
     if (!newStaffName.trim()) return alert("Enter the staff member's name.");
@@ -408,6 +507,22 @@ export function ExpenseModal({ expense, staff, onClose, onSave }) {
         </Field>
         <Field label="Description (optional)">
           <input className="input" value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        </Field>
+        <Field label="Related document (optional — receipt, bill, invoice photo)">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <input
+              type="file"
+              accept="image/*,.pdf"
+              onChange={(e) => uploadReceipt(e.target.files[0])}
+              style={{ fontSize: 12.5 }}
+            />
+            {uploading && <span style={{ fontSize: 12, color: "var(--ink45)" }}>Uploading…</span>}
+            {form.receipt_path && !uploading && (
+              <Button variant="ghost" onClick={viewReceipt}>
+                View uploaded document
+              </Button>
+            )}
+          </div>
         </Field>
       </div>
       <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>

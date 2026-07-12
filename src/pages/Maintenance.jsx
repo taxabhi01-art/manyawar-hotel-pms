@@ -18,7 +18,8 @@ export default function Maintenance({ tickets, rooms, staff, reload }) {
       const { error } = await addMaintenanceTicket(patch);
       if (error) return alert(`Couldn't create this ticket: ${error.message}`);
       const room = rooms.find((r) => r.id === patch.room_id);
-      logActivity("Maintenance ticket created", `Room ${room ? room.number : "—"} — ${patch.issue} (${patch.priority})`);
+      const where = room ? `Room ${room.number}` : patch.area_name;
+      logActivity("Maintenance ticket created", `${where} — ${patch.issue} (${patch.priority})`);
     }
     setModal(null);
     reload();
@@ -48,7 +49,7 @@ export default function Maintenance({ tickets, rooms, staff, reload }) {
     if (waWindow) {
       waWindow.location.href = whatsappLink(
         assignedStaff.phone,
-        `Hi ${assignedStaff.name}, maintenance ticket assigned: "${ticket.issue}" for Room ${room ? room.number : ""} (Priority: ${ticket.priority}). — MANYAWAR HOTEL`
+        `Hi ${assignedStaff.name}, maintenance ticket assigned: "${ticket.issue}" for ${room ? `Room ${room.number}` : ticket.area_name || "a common area"} (Priority: ${ticket.priority}). — MANYAWAR HOTEL`
       );
     }
     reload();
@@ -98,7 +99,10 @@ export default function Maintenance({ tickets, rooms, staff, reload }) {
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, width: 50 }}>{room ? room.number : "—"}</span>
                 <div style={{ flex: 1, minWidth: 160 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t.issue}</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+                    {t.issue}
+                    <span style={{ fontWeight: 400, color: "var(--ink45)" }}> — {room ? `Room ${room.number}` : t.area_name || "Common area"}</span>
+                  </div>
                   <div style={{ fontSize: 11.5, color: "var(--ink45)" }}>Reported {fmtDateTime(t.created_at)}{t.reported_by ? ` by ${t.reported_by}` : ""}</div>
                 </div>
                 <Pill color={PRIORITY_COLOR[t.priority] || "#46536b"}>{t.priority}</Pill>
@@ -143,22 +147,44 @@ export default function Maintenance({ tickets, rooms, staff, reload }) {
   );
 }
 
+const COMMON_AREAS = ["Lobby", "Reception", "Corridor / Stairs", "Parking", "Garden / Lawn", "Restaurant", "Kitchen", "Terrace", "Elevator", "Generator/Electrical room", "Other"];
+
 function TicketModal({ ticket, rooms, onClose, onSave }) {
+  const [locationType, setLocationType] = useState(ticket ? (ticket.room_id ? "room" : "area") : "room");
   const [form, setForm] = useState(
-    ticket || { room_id: rooms[0]?.id || "", issue: "", priority: "Medium", status: "Open" }
+    ticket || { room_id: rooms[0]?.id || "", area_name: "", issue: "", priority: "Medium", status: "Open" }
   );
   return (
     <Modal title={ticket ? "Edit ticket" : "New maintenance ticket"} onClose={onClose}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="Room">
-          <select className="input" value={form.room_id} onChange={(e) => setForm({ ...form, room_id: e.target.value })}>
-            {rooms.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.number}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button variant={locationType === "room" ? "primary" : "ghost"} onClick={() => setLocationType("room")}>
+            Room
+          </Button>
+          <Button variant={locationType === "area" ? "primary" : "ghost"} onClick={() => setLocationType("area")}>
+            Common area
+          </Button>
+        </div>
+        {locationType === "room" ? (
+          <Field label="Room">
+            <select className="input" value={form.room_id || ""} onChange={(e) => setForm({ ...form, room_id: e.target.value, area_name: "" })}>
+              {rooms.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.number}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : (
+          <Field label="Common area">
+            <select className="input" value={form.area_name || ""} onChange={(e) => setForm({ ...form, area_name: e.target.value, room_id: null })}>
+              <option value="">Select…</option>
+              {COMMON_AREAS.map((a) => (
+                <option key={a}>{a}</option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="Issue">
           <input className="input" value={form.issue} onChange={(e) => setForm({ ...form, issue: e.target.value })} placeholder="e.g. AC not cooling" />
         </Field>
@@ -176,7 +202,8 @@ function TicketModal({ ticket, rooms, onClose, onSave }) {
         </Button>
         <Button
           onClick={() => {
-            if (!form.room_id) return alert("Select a room.");
+            if (locationType === "room" && !form.room_id) return alert("Select a room.");
+            if (locationType === "area" && !form.area_name) return alert("Select a common area.");
             if (!form.issue.trim()) return alert("Describe the issue.");
             onSave(form);
           }}

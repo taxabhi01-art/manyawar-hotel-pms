@@ -199,6 +199,7 @@ export default function App() {
   // open the same modal.
   const [checkInModal, setCheckInModal] = useState(null);
   const [checkOutModal, setCheckOutModal] = useState(null);
+  const [autoOpenPaymentFor, setAutoOpenPaymentFor] = useState(null);
 
   const finishCheckIn = async ({ early, earlyFee }) => {
     const booking = checkInModal;
@@ -229,6 +230,11 @@ export default function App() {
     // Auto-queue a cleaning task — any Housekeeping staff can pick it up (see Staff tab)
     await addTask({ staff_id: null, room_id: booking.room_id, task: "Clean room after checkout", done: false });
     setCheckOutModal(null);
+    // Pending balance? Jump straight to Billing → Record payment for this booking.
+    if (newTotal - booking.paid_amount > 0) {
+      setAutoOpenPaymentFor(booking.id);
+      setTab("billing");
+    }
     reload();
   };
 
@@ -443,7 +449,7 @@ export default function App() {
                 guests={data.guests}
                 setTab={setTab}
                 onOpenCheckIn={(b) => setCheckInModal(b)}
-                onOpenCheckOut={(b) => setCheckOutModal(b)}
+                onOpenCheckOut={(b) => { setAutoOpenPaymentFor(null); setCheckOutModal(b); }}
               />
             )}
             {tab === "calendar" && <CalendarPage bookings={data.bookings} guests={data.guests} rooms={data.rooms} />}
@@ -457,13 +463,21 @@ export default function App() {
                 maintenanceTickets={data.maintenanceTickets}
                 highlightId={highlightId}
                 onOpenCheckIn={(b) => setCheckInModal(b)}
-                onOpenCheckOut={(b) => setCheckOutModal(b)}
+                onOpenCheckOut={(b) => { setAutoOpenPaymentFor(null); setCheckOutModal(b); }}
                 reload={reload}
               />
             )}
             {tab === "guests" && <Guests guests={data.guests} bookings={data.bookings} highlightId={highlightId} reload={reload} />}
             {tab === "billing" && (
-              <Billing bookings={data.bookings} guests={data.guests} rooms={data.rooms} inventoryUsage={data.inventoryUsage} role={role} reload={reload} />
+              <Billing
+                bookings={data.bookings}
+                guests={data.guests}
+                rooms={data.rooms}
+                inventoryUsage={data.inventoryUsage}
+                role={role}
+                autoOpenPaymentFor={autoOpenPaymentFor}
+                reload={reload}
+              />
             )}
             {tab === "inventory" && (
               <Inventory
@@ -494,7 +508,7 @@ export default function App() {
                 reload={reload}
               />
             )}
-            {tab === "finance" && role === "owner" && <Finance bookings={data.bookings} expenses={data.expenses} staff={data.staff} reload={reload} />}
+            {tab === "finance" && role === "owner" && <Finance bookings={data.bookings} guests={data.guests} expenses={data.expenses} staff={data.staff} reload={reload} />}
             {tab === "reports" && role === "owner" && (
               <Reports rooms={data.rooms} guests={data.guests} bookings={data.bookings} staff={data.staff} attendance={data.attendance} />
             )}

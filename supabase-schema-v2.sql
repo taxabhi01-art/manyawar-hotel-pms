@@ -1,63 +1,61 @@
-// Supabase Edge Function: send-push
-// Sends a real push notification (works even if the app tab is closed) to
-// one person by email, using the Web Push protocol.
-//
-// Deploy with: supabase functions deploy send-push
-// Then set secrets (once):
-//   supabase secrets set VAPID_PUBLIC_KEY=<public key> VAPID_PRIVATE_KEY=<private key> VAPID_SUBJECT=mailto:you@example.com
+-- MANYAWAR HOTEL PMS — Migration 2
+-- Adds: owner-vs-staff roles, and hotel/GST settings
+-- Paste this into Supabase → SQL Editor → New Query → Run
+-- (Safe to run even though tables already exist — this only ADDS new things.)
 
-import { createClient } from "npm:@supabase/supabase-js@2";
-import webPush from "npm:web-push@3";
+-- ---------- PROFILES (who is "owner" vs "staff") ----------
+create table if not exists profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  role text not null default 'staff' -- 'owner' or 'staff'
+);
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY")!;
-const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY")!;
-const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") || "mailto:admin@example.com";
+alter table profiles enable row level security;
 
-webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+drop policy if exists "read own profile" on profiles;
+create policy "read own profile" on profiles for select using (auth.uid() = id);
 
-Deno.serve(async (req) => {
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
-  }
+-- Auto-create a profile row (as 'staff') whenever a new login is created
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.profiles (id, email, role)
+  values (new.id, new.email, 'staff')
+  on conflict (id) do nothing;
+  return new;
+end;
+$$ language plpgsql security definer;
 
-  try {
-    const { user_email, title, body, url } = await req.json();
-    if (!user_email || !title) {
-      return new Response(JSON.stringify({ error: "user_email and title are required" }), { status: 400 });
-    }
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
 
-    const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-    const { data: subs, error } = await supabase
-      .from("push_subscriptions")
-      .select("*")
-      .eq("user_email", user_email);
+-- Backfill profiles for accounts that already existed before this migration
+insert into public.profiles (id, email, role)
+select id, email, 'staff' from auth.users
+on conflict (id) do nothing;
 
-    if (error) throw error;
-    if (!subs || subs.length === 0) {
-      return new Response(JSON.stringify({ sent: 0, note: "No subscriptions for this user" }), { status: 200 });
-    }
+-- ---------- SETTINGS (hotel info + GST, one row) ----------
+create table if not exists settings (
+  id int primary key default 1,
+  hotel_name text default 'MANYAWAR HOTEL',
+  address text,
+  phone text,
+  gst_number text,
+  gst_percent numeric default 0,
+  check (id = 1)
+);
+insert into settings (id) values (1) on conflict (id) do nothing;
 
-    const payload = JSON.stringify({ title, body: body || "", url: url || "/" });
-    let sent = 0;
-    for (const sub of subs) {
-      try {
-        await webPush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        );
-        sent++;
-      } catch (err) {
-        // 404/410 = subscription expired or unsubscribed — clean it up.
-        if (err.statusCode === 404 || err.statusCode === 410) {
-          await supabase.from("push_subscriptions").delete().eq("id", sub.id);
-        }
-      }
-    }
+alter table settings enable row level security;
+drop policy if exists "staff can read settings" on settings;
+create policy "staff can read settings" on settings for select using (auth.role() = 'authenticated');
+drop policy if exists "staff can update settings" on settings;
+create policy "staff can update settings" on settings for update using (auth.role() = 'authenticated');
 
-    return new Response(JSON.stringify({ sent }), { status: 200, headers: { "Content-Type": "application/json" } });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
-  }
-});
+-- ---------- AFTER RUNNING THIS ----------
+-- 1. Go to Table Editor → profiles
+-- 2. Find the row with YOUR email
+-- 3. Click the "role" cell and change it from "staff" to "owner"
+-- 4. That's it — only your login will now see Reports & Settings.

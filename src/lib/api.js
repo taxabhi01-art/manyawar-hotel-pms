@@ -198,6 +198,14 @@ export async function getIdProofSignedUrl(path) {
   return supabase.storage.from("id-proofs").createSignedUrl(path, 3600); // valid 1 hour
 }
 
+// ---------- EXPENSE RECEIPTS (Supabase Storage) ----------
+export async function uploadExpenseReceipt(path, file) {
+  return supabase.storage.from("expense-receipts").upload(path, file, { upsert: true, contentType: file.type });
+}
+export async function getExpenseReceiptSignedUrl(path) {
+  return supabase.storage.from("expense-receipts").createSignedUrl(path, 3600);
+}
+
 // ---------- PUSH NOTIFICATIONS ----------
 export async function savePushSubscription(sub) {
   return supabase.from("push_subscriptions").upsert(sub, { onConflict: "endpoint" });
