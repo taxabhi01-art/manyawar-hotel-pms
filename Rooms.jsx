@@ -95,7 +95,7 @@ export default function Maintenance({ tickets, rooms, staff, reload }) {
           const room = rooms.find((r) => r.id === t.room_id);
           const assigned = staff.find((s) => s.id === t.assigned_staff_id);
           return (
-            <div className="card" key={t.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
+            <div className="card" key={t.id} style={{ flexDirection: "column", alignItems: "stretch", ...(t.reported_by === "Guest (QR)" ? { borderColor: "var(--brass)", background: "#fff8ea" } : {}) }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, width: 50 }}>{room ? room.number : "—"}</span>
                 <div style={{ flex: 1, minWidth: 160 }}>
@@ -103,7 +103,10 @@ export default function Maintenance({ tickets, rooms, staff, reload }) {
                     {t.issue}
                     <span style={{ fontWeight: 400, color: "var(--ink45)" }}> — {room ? `Room ${room.number}` : t.area_name || "Common area"}</span>
                   </div>
-                  <div style={{ fontSize: 11.5, color: "var(--ink45)" }}>Reported {fmtDateTime(t.created_at)}{t.reported_by ? ` by ${t.reported_by}` : ""}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink45)" }}>
+                    Reported {fmtDateTime(t.created_at)}
+                    {t.reported_by === "Guest (QR)" ? " by guest (QR scan) 📱" : t.reported_by ? ` by ${t.reported_by}` : ""}
+                  </div>
                 </div>
                 <Pill color={PRIORITY_COLOR[t.priority] || "#46536b"}>{t.priority}</Pill>
                 <Pill color={STATUS_COLOR[t.status] || "#46536b"}>{t.status}</Pill>

@@ -1,12 +1,6 @@
--- MANYAWAR HOTEL PMS — Migration 6
--- Adds: actual check-in/check-out timestamps, early check-in & late checkout
--- fee tracking, and a manual booking reference number
--- Paste this into Supabase → SQL Editor → New Query → Run
-
-alter table bookings add column if not exists checked_in_at timestamptz;
-alter table bookings add column if not exists checked_out_at timestamptz;
-alter table bookings add column if not exists early_checkin boolean default false;
-alter table bookings add column if not exists early_checkin_fee numeric default 0;
-alter table bookings add column if not exists late_checkout boolean default false;
-alter table bookings add column if not exists late_checkout_fee numeric default 0;
-alter table bookings add column if not exists booking_ref text;
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="96" fill="#16233A"/>
+  <rect x="28" y="28" width="456" height="456" rx="72" fill="none" stroke="#B8863F" stroke-width="6" opacity="0.55"/>
+  <text x="256" y="330" font-family="Georgia, 'Times New Roman', serif" font-size="290" font-weight="700"
+        fill="#B8863F" text-anchor="middle">M</text>
+</svg>

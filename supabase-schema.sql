@@ -1,102 +1,78 @@
--- MANYAWAR HOTEL PMS — Supabase schema
--- Paste this whole file into Supabase → SQL Editor → New Query → Run
+// Supabase Edge Function: guest-report
+// Public endpoint — a guest scans a room's QR code, lands on a no-login page,
+// and submits an issue. This function creates the maintenance ticket and
+// pushes a notification to everyone subscribed (owner + staff).
+//
+// Deploy with: supabase functions deploy guest-report
+// Uses the same VAPID secrets already set for send-push/daily-reminders.
 
-create extension if not exists "pgcrypto";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import webPush from "npm:web-push@3";
 
--- ROOMS
-create table if not exists rooms (
-  id uuid primary key default gen_random_uuid(),
-  number text not null,
-  floor int default 1,
-  type text default 'Standard',
-  rate numeric default 0,
-  status text default 'available'
-);
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY")!;
+const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY")!;
+const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") || "mailto:admin@example.com";
 
--- GUESTS
-create table if not exists guests (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  phone text,
-  email text,
-  id_proof text,
-  vip boolean default false
-);
+webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
--- BOOKINGS
-create table if not exists bookings (
-  id uuid primary key default gen_random_uuid(),
-  guest_id uuid references guests(id) on delete set null,
-  room_id uuid references rooms(id) on delete set null,
-  check_in date not null,
-  check_out date not null,
-  status text default 'reserved', -- reserved | checked-in | checked-out
-  rate numeric default 0,
-  nights int default 1,
-  subtotal numeric default 0,
-  discount numeric default 0,
-  discount_reason text,
-  total numeric default 0,
-  paid_amount numeric default 0,
-  source text default 'Walk-in',
-  deposit numeric default 0,
-  deposit_refunded boolean default false,
-  created_at timestamptz default now()
-);
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
--- PAYMENTS
-create table if not exists payments (
-  id uuid primary key default gen_random_uuid(),
-  booking_id uuid references bookings(id) on delete cascade,
-  amount numeric not null,
-  mode text default 'Cash',
-  paid_on date default current_date
-);
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
+  if (req.method !== "POST") return new Response("Method not allowed", { status: 405, headers: CORS_HEADERS });
 
--- STAFF
-create table if not exists staff (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  role text default 'Front Desk',
-  shift text default 'Morning',
-  phone text
-);
+  try {
+    const { room_number, issue, priority } = await req.json();
+    if (!room_number || !issue) {
+      return new Response(JSON.stringify({ error: "room_number and issue are required" }), { status: 400, headers: CORS_HEADERS });
+    }
 
--- TASKS (housekeeping)
-create table if not exists tasks (
-  id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id) on delete cascade,
-  room_id uuid references rooms(id) on delete set null,
-  task text not null,
-  done boolean default false
-);
+    const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
--- ATTENDANCE
-create table if not exists attendance (
-  id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id) on delete cascade,
-  date date not null,
-  status text not null,
-  unique (staff_id, date)
-);
+    const { data: room } = await supabase.from("rooms").select("id, number").eq("number", room_number).maybeSingle();
+    if (!room) {
+      return new Response(JSON.stringify({ error: "Room not found" }), { status: 404, headers: CORS_HEADERS });
+    }
 
--- ---------- SECURITY ----------
--- Row Level Security: any signed-in staff member (created by you in
--- Authentication → Users) can read and write everything. There is no
--- public access — signed-out visitors see nothing.
+    const { error: insertError } = await supabase.from("maintenance_tickets").insert({
+      room_id: room.id,
+      issue,
+      priority: priority || "Medium",
+      status: "Open",
+      reported_by: "Guest (QR)",
+    });
+    if (insertError) throw insertError;
 
-alter table rooms enable row level security;
-alter table guests enable row level security;
-alter table bookings enable row level security;
-alter table payments enable row level security;
-alter table staff enable row level security;
-alter table tasks enable row level security;
-alter table attendance enable row level security;
+    await supabase.from("activity_log").insert({
+      action: "Guest reported an issue",
+      details: `Room ${room.number} — ${issue}`,
+      performed_by: "Guest (QR)",
+    });
 
-create policy "staff full access" on rooms for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "staff full access" on guests for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "staff full access" on bookings for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "staff full access" on payments for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "staff full access" on staff for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "staff full access" on tasks for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
-create policy "staff full access" on attendance for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+    // Notify everyone subscribed to push (owner + staff)
+    const { data: subs } = await supabase.from("push_subscriptions").select("*").limit(500);
+    const payload = JSON.stringify({
+      title: `⚠ Room ${room.number} — Guest reported an issue`,
+      body: issue,
+      url: "/",
+    });
+    for (const sub of subs || []) {
+      try {
+        await webPush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
+      } catch (err) {
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          await supabase.from("push_subscriptions").delete().eq("id", sub.id);
+        }
+      }
+    }
+
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS_HEADERS });
+  }
+});
