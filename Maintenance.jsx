@@ -1,0 +1,144 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --ink: #16233a;
+  --ink-soft: #22314b;
+  --parchment: #f6f1e7;
+  --brass: #b8863f;
+  --brass-soft: #d8b87b;
+  --sage: #5f8863;
+  --rust: #a6452f;
+  --amber: #c99a3c;
+  --slate: #46536b;
+  --ink70: rgba(22, 35, 58, 0.7);
+  --ink45: rgba(22, 35, 58, 0.45);
+  --hairline: rgba(22, 35, 58, 0.12);
+  --font-display: "Fraunces", serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: var(--font-body); background: var(--parchment); color: var(--ink); }
+
+.app { min-height: 100vh; display: flex; }
+
+.sidebar {
+  width: 220px; flex-shrink: 0; background: var(--ink); color: var(--parchment);
+  display: flex; flex-direction: column; padding: 22px 14px; position: sticky; top: 0;
+  height: 100vh; overflow-y: auto;
+  padding-top: calc(22px + env(safe-area-inset-top));
+  padding-left: calc(14px + env(safe-area-inset-left));
+}
+.sidebar h1 { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: 19px; margin: 0; white-space: nowrap; }
+.nav { margin-top: 28px; display: flex; flex-direction: column; gap: 3px; }
+.nav-btn {
+  all: unset; cursor: pointer; display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: var(--parchment);
+  white-space: nowrap;
+}
+.nav-btn.active { color: var(--ink); background: var(--brass-soft); }
+.sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+.sidebar-footer button {
+  all: unset; cursor: pointer; font-size: 12.5px; font-weight: 600; color: rgba(246,241,231,0.75);
+  padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(246,241,231,0.18);
+  white-space: nowrap;
+}
+.sidebar-footer .muted { font-size: 11px; color: rgba(246,241,231,0.4); line-height: 1.5; }
+
+.main {
+  flex: 1; padding: 28px 32px; max-width: 1100px; margin: 0 auto; width: 100%;
+  padding-right: calc(32px + env(safe-area-inset-right));
+  padding-bottom: calc(28px + env(safe-area-inset-bottom));
+}
+
+.section-title { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
+.section-title .eyebrow { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--brass); font-weight: 700; }
+.section-title h2 { font-family: var(--font-display); font-size: 28px; margin: 2px 0 0; }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 30px; }
+.stat-card { background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 16px 18px; }
+.stat-card .label { font-size: 12px; color: var(--ink45); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.stat-card .value { font-family: var(--font-display); font-size: 30px; margin-top: 4px; }
+.stat-card .sub { font-size: 12px; color: var(--ink45); margin-top: 2px; }
+
+.card { background: #fff; border: 1px solid var(--hairline); border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.card-col { min-width: 140px; }
+.card-col .title { font-weight: 600; font-size: 14px; }
+.card-col .sub { font-size: 12px; color: var(--ink45); }
+
+.btn { font-family: var(--font-body); font-weight: 600; font-size: 13px; border-radius: 8px; padding: 9px 14px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid transparent; background: var(--brass); color: #fff; }
+.btn-dark { background: var(--ink); color: var(--parchment); }
+.btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--hairline); }
+.btn-danger { background: transparent; color: var(--rust); border: 1px solid rgba(166,69,47,0.35); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.input, select.input, textarea.input {
+  font-family: var(--font-body); font-size: 14px; color: var(--ink); background: #fff;
+  border: 1px solid var(--hairline); border-radius: 8px; padding: 9px 11px; outline: none; width: 100%;
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; font-weight: 600; color: var(--ink70); letter-spacing: 0.03em; text-transform: uppercase; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 3px 10px; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(22,35,58,0.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.modal { background: var(--parchment); border-radius: 14px; width: 100%; max-width: 480px; max-height: 88vh; overflow-y: auto; box-shadow: 0 24px 60px rgba(22,35,58,0.35); border: 1px solid var(--hairline); }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--hairline); position: sticky; top: 0; background: var(--parchment); }
+.modal-header h3 { font-family: var(--font-display); font-size: 19px; margin: 0; }
+.modal-body { padding: 20px; }
+.modal-close { background: none; border: none; cursor: pointer; color: var(--ink70); font-size: 18px; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+.login-shell { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: var(--ink); padding: 20px; padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left)); }
+.login-card { background: var(--parchment); border-radius: 16px; padding: 32px 28px; width: 100%; max-width: 340px; box-shadow: 0 24px 60px rgba(0,0,0,0.35); }
+.login-card h2 { font-family: var(--font-display); font-size: 22px; text-align: center; margin: 0 0 4px; }
+.login-card p { font-size: 13px; color: var(--ink45); text-align: center; margin: 0 0 20px; }
+
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 48px 20px; color: var(--ink45); text-align: center; }
+
+.error-banner { background: #fff4ee; border: 1px solid rgba(166,69,47,0.35); color: var(--rust); border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
+
+@media (max-width: 720px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+
+  .app { flex-direction: column; min-height: 100dvh; }
+
+  .sidebar {
+    width: 100%; height: auto; position: sticky; top: 0; z-index: 40;
+    flex-direction: row; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: calc(10px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-left)) 10px calc(14px + env(safe-area-inset-left));
+    overflow: visible;
+  }
+  .sidebar h1 { font-size: 15px; flex-shrink: 0; order: 1; }
+  .nav {
+    margin-top: 0; flex-direction: row; gap: 2px; flex: 1; order: 2;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-btn { padding: 7px 10px; font-size: 12.5px; }
+
+  .sidebar-footer {
+    margin-top: 0; flex-direction: row; flex-shrink: 0; order: 3;
+  }
+  .sidebar-footer .muted { display: none; }
+  .sidebar-footer button { padding: 7px 10px; font-size: 11.5px; }
+
+  /* Search takes its own full-width row below the nav bar on mobile — giving
+     it space in the same row as nav would squeeze/hide the nav buttons. */
+  .global-search { order: 4; flex-basis: 100%; margin-top: 0 !important; }
+
+  .main {
+    padding: 16px; padding-right: calc(16px + env(safe-area-inset-right));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .card { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .card > span, .card > div:not(.card-col) { width: auto !important; }
+  .card > div[style*="margin-left"] { margin-left: 0 !important; width: 100%; }
+}
+

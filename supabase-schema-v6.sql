@@ -1,12 +1,26 @@
--- MANYAWAR HOTEL PMS — Migration 6
--- Adds: actual check-in/check-out timestamps, early check-in & late checkout
--- fee tracking, and a manual booking reference number
--- Paste this into Supabase → SQL Editor → New Query → Run
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>MANYAWAR HOTEL — PMS</title>
 
-alter table bookings add column if not exists checked_in_at timestamptz;
-alter table bookings add column if not exists checked_out_at timestamptz;
-alter table bookings add column if not exists early_checkin boolean default false;
-alter table bookings add column if not exists early_checkin_fee numeric default 0;
-alter table bookings add column if not exists late_checkout boolean default false;
-alter table bookings add column if not exists late_checkout_fee numeric default 0;
-alter table bookings add column if not exists booking_ref text;
+    <!-- PWA: lets phones install this as a home-screen app -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#16233A" />
+    <link rel="icon" href="/icons/icon-192.png" />
+
+    <!-- Android / Chrome -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- iOS Safari -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Manyawar PMS" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
