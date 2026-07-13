@@ -149,7 +149,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     const subtotal = rate * nights;
     const discount = Math.min(booking.discount || 0, subtotal);
     const total = computeBookingTotal({ ...booking, subtotal, discount });
-    await updateBooking(booking.id, {
+    const patch = {
       room_id: room ? room.id : booking.room_id,
       check_in: checkIn,
       check_out: checkOut,
@@ -161,10 +161,15 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       source,
       co_guests_count: Number(coGuestsCount) || 0,
       booking_ref: bookingRef.trim() || null,
-    });
+    };
+    await updateBooking(booking.id, patch);
     logActivity("Booking edited", `${guestOf(booking.guest_id)?.name || "Guest"} — Room ${room?.number || roomOf(booking.room_id)?.number || "—"}`);
     setEditModal(null);
     reload();
+    // Auto-generate an updated confirmation PDF reflecting the edited details
+    // — updateBooking() doesn't return the row, so merge the patch locally.
+    const { data: settings } = await getSettings();
+    downloadBookingConfirmation({ ...booking, ...patch }, guestOf(booking.guest_id), room || roomOf(booking.room_id), settings || {});
   };
 
   const visible = bookings.filter((b) => {
@@ -1223,7 +1228,7 @@ function downloadBookingConfirmation(booking, guest, room, settings) {
   doc.text(pdfMoney(booking.total), 196, y, { align: "right" });
   y += 8;
 
-  const balance = booking.total - (booking.deposit || 0);
+  const balance = booking.total - (booking.paid_amount || 0);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9.5);
   doc.setTextColor(70, 83, 107);
