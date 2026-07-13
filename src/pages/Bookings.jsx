@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import {
@@ -60,7 +60,15 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const guestOf = (id) => guests.find((g) => g.id === id);
   const bookableRooms = rooms.filter((r) => r.status !== "maintenance");
 
-  const createBooking = async ({ guest, roomId, checkIn, checkOut, source, deposit, depositMode, coGuestsCount, bookingRef, bookedOn }) => {
+  // roomSelections: [{ roomId, coGuestsCount }] — one row per room. Guest,
+  // dates, source and booking ref are common to the whole submission; each
+  // room becomes its own booking record (mirrors how check-in/checkout/edit
+  // already operate per-booking, so a multi-room stay is just N sibling rows
+  // sharing guest_id + check_in + check_out). Deposit is only ever attached
+  // to the first room's record, and the booking ref gets a "-2", "-3", …
+  // suffix per extra room so refs stay unique without the guest having to
+  // type multiple references.
+  const createBooking = async ({ guest, rooms: roomSelections, checkIn, checkOut, source, deposit, depositMode, bookingRef, bookedOn }) => {
     setBusy(true);
     let guestId = guest.id;
     let fullGuest = guest;
@@ -69,42 +77,58 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       guestId = data?.id;
       fullGuest = data;
     }
-    const room = roomOf(roomId);
     const nights = nightsBetween(checkIn, checkOut);
-    const occupancy = 1 + (coGuestsCount || 0);
-    const rate = computeRoomRate(room, occupancy);
-    const subtotal = rate * nights;
-    const { data: newBooking } = await addBooking({
-      guest_id: guestId,
-      room_id: roomId,
-      check_in: checkIn,
-      check_out: checkOut,
-      status: "reserved",
-      rate,
-      nights,
-      subtotal,
-      discount: 0,
-      total: subtotal,
-      paid_amount: 0,
-      source: source || "Walk-in",
-      deposit: deposit || 0,
-      deposit_mode: deposit > 0 ? depositMode || "Cash" : null,
-      deposit_refunded: false,
-      co_guests_count: coGuestsCount || 0,
-      booking_ref: bookingRef || null,
-      created_at: bookedOn ? new Date(bookedOn + "T12:00:00").toISOString() : undefined,
-    });
+    const newBookings = [];
+    const roomsUsed = [];
+    for (let i = 0; i < roomSelections.length; i++) {
+      const { roomId, coGuestsCount } = roomSelections[i];
+      const room = roomOf(roomId);
+      const occupancy = 1 + (coGuestsCount || 0);
+      const rate = computeRoomRate(room, occupancy);
+      const subtotal = rate * nights;
+      const ref = bookingRef ? (i === 0 ? bookingRef : `${bookingRef}-${i + 1}`) : null;
+      const { data: newBooking } = await addBooking({
+        guest_id: guestId,
+        room_id: roomId,
+        check_in: checkIn,
+        check_out: checkOut,
+        status: "reserved",
+        rate,
+        nights,
+        subtotal,
+        discount: 0,
+        total: subtotal,
+        paid_amount: 0,
+        source: source || "Walk-in",
+        deposit: i === 0 ? deposit || 0 : 0,
+        deposit_mode: i === 0 && deposit > 0 ? depositMode || "Cash" : null,
+        deposit_refunded: false,
+        co_guests_count: coGuestsCount || 0,
+        booking_ref: ref,
+        created_at: bookedOn ? new Date(bookedOn + "T12:00:00").toISOString() : undefined,
+      });
+      if (newBooking) {
+        newBookings.push(newBooking);
+        roomsUsed.push(room);
+      }
+    }
     setBusy(false);
     setModal(null);
     reload();
-    // Auto-generate the confirmation PDF the moment the booking is created —
-    // staff don't have to remember to come back for it separately.
-    if (newBooking) {
+    // Auto-generate one combined confirmation PDF the moment the booking is
+    // created — staff don't have to remember to come back for it separately,
+    // and a multi-room stay gets a single PDF instead of N popup downloads.
+    if (newBookings.length) {
       const { data: settings } = await getSettings();
-      downloadBookingConfirmation(newBooking, fullGuest, room, settings || {});
+      downloadBookingConfirmation(
+        newBookings.map((nb, i) => ({ booking: nb, room: roomsUsed[i] })),
+        fullGuest,
+        settings || {}
+      );
     }
-    if (fullGuest?.phone) {
-      setConfirmSendModal({ guest: fullGuest, room, checkIn, checkOut, total: subtotal });
+    if (fullGuest?.phone && roomsUsed.length) {
+      const grandTotal = newBookings.reduce((s, nb) => s + (nb.total || 0), 0);
+      setConfirmSendModal({ guest: fullGuest, rooms: roomsUsed, checkIn, checkOut, total: grandTotal });
     }
   };
 
@@ -169,7 +193,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     // Auto-generate an updated confirmation PDF reflecting the edited details
     // — updateBooking() doesn't return the row, so merge the patch locally.
     const { data: settings } = await getSettings();
-    downloadBookingConfirmation({ ...booking, ...patch }, guestOf(booking.guest_id), room || roomOf(booking.room_id), settings || {});
+    downloadBookingConfirmation(
+      [{ booking: { ...booking, ...patch }, room: room || roomOf(booking.room_id) }],
+      guestOf(booking.guest_id),
+      settings || {}
+    );
   };
 
   const visible = bookings.filter((b) => {
@@ -178,6 +206,33 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     if (dateTo && b.check_in > dateTo) return false;
     return true;
   });
+
+  // Multi-room bookings are stored as separate rows sharing the same guest +
+  // dates (see createBooking above) — group them here purely for display:
+  // a "N rooms" badge, and clustering the rows next to each other regardless
+  // of how the underlying list happens to be sorted.
+  const groupKeyOf = (b) => `${b.guest_id}|${b.check_in}|${b.check_out}`;
+  const groupSizes = useMemo(() => {
+    const sizes = {};
+    bookings.forEach((b) => {
+      const k = groupKeyOf(b);
+      sizes[k] = (sizes[k] || 0) + 1;
+    });
+    return sizes;
+  }, [bookings]);
+  const groupedVisible = useMemo(() => {
+    const byKey = new Map();
+    const order = [];
+    visible.forEach((b) => {
+      const k = groupKeyOf(b);
+      if (!byKey.has(k)) {
+        byKey.set(k, []);
+        order.push(k);
+      }
+      byKey.get(k).push(b);
+    });
+    return order.flatMap((k) => byKey.get(k));
+  }, [visible]);
 
   return (
     <div>
@@ -231,17 +286,28 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         )}
       </div>
 
-      {visible.length === 0 ? (
+      {groupedVisible.length === 0 ? (
         <EmptyState text="No bookings match this view." />
       ) : (
-        visible.map((b) => {
+        groupedVisible.map((b) => {
           const g = guestOf(b.guest_id);
           const r = roomOf(b.room_id);
+          const groupSize = groupSizes[groupKeyOf(b)] || 1;
           return (
             <div className="card" key={b.id} id={`booking-${b.id}`} style={b.id === highlightId ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : undefined}>
               <div className="card-col">
                 <div className="title">
                   {g ? g.name : "Guest removed"} {g?.vip && "⭐"}
+                  {groupSize > 1 && (
+                    <span
+                      style={{
+                        marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: "#fff",
+                        background: "var(--ink)", borderRadius: 999, padding: "2px 8px",
+                      }}
+                    >
+                      {groupSize} rooms
+                    </span>
+                  )}
                 </div>
                 <div className="sub">{g ? g.phone : ""}</div>
                 {b.booking_ref && (
@@ -478,8 +544,14 @@ function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, main
 }
 
 function WhatsAppConfirmModal({ info, onClose }) {
-  const { guest, room, checkIn, checkOut, total } = info;
-  const message = `Hi ${guest.name}, your booking at MANYAWAR HOTEL is confirmed!\nRoom: ${room?.number || ""} (${room?.type || ""})\nCheck-in: ${fmtDate(checkIn)}\nCheck-out: ${fmtDate(checkOut)}\nTotal: ${currency(total)}\n\nWe look forward to hosting you!`;
+  const { guest, rooms, checkIn, checkOut, total } = info;
+  // A multi-room booking gets one combined "Rooms: 101, 102" line instead of
+  // sending the guest a separate WhatsApp message per room.
+  const roomsLine =
+    rooms.length > 1
+      ? `Rooms: ${rooms.map((r) => r?.number).filter(Boolean).join(", ")}`
+      : `Room: ${rooms[0]?.number || ""} (${rooms[0]?.type || ""})`;
+  const message = `Hi ${guest.name}, your booking at MANYAWAR HOTEL is confirmed!\n${roomsLine}\nCheck-in: ${fmtDate(checkIn)}\nCheck-out: ${fmtDate(checkOut)}\nTotal: ${currency(total)}\n\nWe look forward to hosting you!`;
   return (
     <Modal title="Booking created" onClose={onClose} width={380}>
       <p style={{ fontSize: 13 }}>Want to send a WhatsApp confirmation to {guest.name}?</p>
@@ -514,7 +586,6 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   const [source, setSource] = useState(BOOKING_SOURCES[0]);
   const [deposit, setDeposit] = useState(0);
   const [depositMode, setDepositMode] = useState(PAYMENT_MODES[0]);
-  const [coGuestsCount, setCoGuestsCount] = useState(0);
   const [bookingRef, setBookingRef] = useState("");
   const [bookedOn, setBookedOn] = useState(todayISO());
 
@@ -524,33 +595,68 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
     () => allRooms.filter((r) => isRoomAvailableForDates(r.id, checkIn, checkOut, bookings, undefined, r.status)),
     [allRooms, bookings, checkIn, checkOut]
   );
-  const [roomId, setRoomId] = useState("");
+
+  // Multi-room: one row per room, each with its own occupancy. Rows share
+  // guest/dates/source/ref — only room + co-guests vary per row.
+  const [roomRows, setRoomRows] = useState([{ id: 1, roomId: "", coGuestsCount: 0 }]);
+  const nextRowIdRef = useRef(2);
   useEffect(() => {
-    if (!availableForDates.find((r) => r.id === roomId)) {
-      setRoomId(availableForDates[0]?.id || "");
-    }
+    // Dates changed — drop any row whose room is no longer available for the
+    // new dates (or collided with another row) and backfill from what's free.
+    setRoomRows((prev) => {
+      const used = new Set();
+      return prev.map((row) => {
+        let roomId = row.roomId;
+        if (!availableForDates.find((r) => r.id === roomId) || used.has(roomId)) {
+          roomId = availableForDates.find((r) => !used.has(r.id))?.id || "";
+        }
+        used.add(roomId);
+        return { ...row, roomId };
+      });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkIn, checkOut]);
 
-  const occupancy = 1 + (Number(coGuestsCount) || 0);
-  const selectedRoom = availableForDates.find((r) => r.id === roomId);
+  const updateRoomRow = (id, patch) => setRoomRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const addRoomRow = () => {
+    const usedIds = new Set(roomRows.map((r) => r.roomId).filter(Boolean));
+    const nextRoom = availableForDates.find((r) => !usedIds.has(r.id));
+    setRoomRows((prev) => [...prev, { id: nextRowIdRef.current, roomId: nextRoom?.id || "", coGuestsCount: 0 }]);
+    nextRowIdRef.current += 1;
+  };
+  const removeRoomRow = (id) => setRoomRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  const canAddRoom = availableForDates.length > roomRows.length;
+
   const nights = nightsBetween(checkIn, checkOut);
-  const previewRate = selectedRoom ? computeRoomRate(selectedRoom, occupancy) : 0;
-  const activeTicket = (maintenanceTickets || []).find((t) => t.room_id === roomId && t.status !== "Resolved");
+  const rowDetails = roomRows.map((row) => {
+    const room = availableForDates.find((r) => r.id === row.roomId);
+    const occupancy = 1 + (Number(row.coGuestsCount) || 0);
+    const rate = room ? computeRoomRate(room, occupancy) : 0;
+    const ticket = room ? (maintenanceTickets || []).find((t) => t.room_id === room.id && t.status !== "Resolved") : null;
+    return { row, room, occupancy, rate, subtotal: rate * nights, ticket };
+  });
+  const grandTotal = rowDetails.reduce((s, d) => s + d.subtotal, 0);
 
   const submit = () => {
     if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
     if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
-    if (!roomId) return alert("No room is available for these dates. Try a different date range.");
+    if (roomRows.some((r) => !r.roomId)) return alert("Select a room for every row (or remove the row) — no room is available for one of them.");
 
-    // Duplicate-booking guard: same ref ID, or same guest name + same dates.
+    // Duplicate-booking guard: same ref ID (base or per-room suffix), or same
+    // guest name + same dates. The name+date check intentionally only looks
+    // at already-saved bookings — the other rooms in THIS submission share
+    // guest/dates on purpose and must not trip it.
     const activeBookings = bookings.filter((b) => b.status !== "cancelled");
-    const refDupe = activeBookings.find((b) => b.booking_ref && b.booking_ref.trim().toLowerCase() === bookingRef.trim().toLowerCase());
-    if (refDupe) {
-      const g = guests.find((x) => x.id === refDupe.guest_id);
-      return alert(
-        `⚠ This booking ID / reference is already used by an existing booking (${g ? g.name : "Guest"}, ${refDupe.check_in} → ${refDupe.check_out}).\n\nUse a different reference, or cancel that booking first.`
-      );
+    const refBase = bookingRef.trim();
+    for (let i = 0; i < roomRows.length; i++) {
+      const ref = i === 0 ? refBase : `${refBase}-${i + 1}`;
+      const refDupe = activeBookings.find((b) => b.booking_ref && b.booking_ref.trim().toLowerCase() === ref.toLowerCase());
+      if (refDupe) {
+        const g = guests.find((x) => x.id === refDupe.guest_id);
+        return alert(
+          `⚠ Booking ID / reference "${ref}" is already used by an existing booking (${g ? g.name : "Guest"}, ${refDupe.check_in} → ${refDupe.check_out}).\n\nUse a different reference, or cancel that booking first.`
+        );
+      }
     }
     const candidateName = (guestMode === "existing" ? guests.find((g) => g.id === existingId)?.name : name.trim())?.toLowerCase();
     const nameDateDupe = candidateName
@@ -565,9 +671,13 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
       );
     }
 
-    if (activeTicket) {
+    const ticketsHit = rowDetails.filter((d) => d.ticket);
+    if (ticketsHit.length) {
+      const lines = ticketsHit
+        .map((d) => `Room ${d.room?.number || ""}: "${d.ticket.issue}" (Priority: ${d.ticket.priority}, Status: ${d.ticket.status})`)
+        .join("\n");
       const proceed = confirm(
-        `⚠ Room ${selectedRoom?.number || ""} has an open maintenance issue:\n\n"${activeTicket.issue}" (Priority: ${activeTicket.priority}, Status: ${activeTicket.status})\n\nBook this room anyway?`
+        `⚠ ${ticketsHit.length > 1 ? "These rooms have" : "This room has"} an open maintenance issue:\n\n${lines}\n\nBook anyway?`
       );
       if (!proceed) return;
     }
@@ -587,14 +697,13 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
     }
     onCreate({
       guest,
-      roomId,
+      rooms: roomRows.map((r) => ({ roomId: r.roomId, coGuestsCount: Number(r.coGuestsCount) || 0 })),
       checkIn,
       checkOut,
       source,
       deposit: Number(deposit) || 0,
       depositMode,
       bookedOn,
-      coGuestsCount: Number(coGuestsCount) || 0,
       bookingRef: bookingRef.trim(),
     });
   };
@@ -684,43 +793,82 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
           ⚠ This check-in date is in the past — allowed, but double-check it's what you meant.
         </p>
       )}
-      <div className="grid-2" style={{ marginTop: 14 }}>
-        <Field label={`Room (${availableForDates.length} available for these dates)`}>
-          {availableForDates.length === 0 ? (
-            <p style={{ fontSize: 12.5, color: "var(--rust)", margin: "4px 0 0" }}>
-              No rooms free for this range.
-            </p>
-          ) : (
-            <select className="input" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-              {availableForDates.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.number} · {r.type}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-        <Field label="Co-guests (people besides the main guest)">
-          <input
-            className="input"
-            type="number"
-            min={0}
-            value={coGuestsCount}
-            onChange={(e) => setCoGuestsCount(Math.max(0, Number(e.target.value)))}
-          />
-        </Field>
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink70)", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 8 }}>
+          Room{roomRows.length > 1 ? "s" : ""} ({availableForDates.length} available for these dates)
+        </div>
+        {availableForDates.length === 0 ? (
+          <p style={{ fontSize: 12.5, color: "var(--rust)", margin: 0 }}>No rooms free for this range.</p>
+        ) : (
+          rowDetails.map(({ row, room, occupancy, rate, subtotal, ticket }, idx) => {
+            const usedByOthers = new Set(roomRows.filter((r) => r.id !== row.id).map((r) => r.roomId).filter(Boolean));
+            const options = availableForDates.filter((r) => r.id === row.roomId || !usedByOthers.has(r.id));
+            return (
+              <div key={row.id} style={{ marginBottom: 10, background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 10 }}>
+                <div className="grid-2">
+                  <Field label={roomRows.length > 1 ? `Room ${idx + 1}` : "Room"}>
+                    <select className="input" value={row.roomId} onChange={(e) => updateRoomRow(row.id, { roomId: e.target.value })}>
+                      {options.length === 0 && <option value="">No room available</option>}
+                      {options.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.number} · {r.type}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <Field label="Co-guests">
+                        <input
+                          className="input"
+                          type="number"
+                          min={0}
+                          value={row.coGuestsCount}
+                          onChange={(e) => updateRoomRow(row.id, { coGuestsCount: Math.max(0, Number(e.target.value)) })}
+                        />
+                      </Field>
+                    </div>
+                    {roomRows.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeRoomRow(row.id)}
+                        title="Remove this room"
+                        style={{
+                          marginBottom: 1, padding: "9px 11px", border: "1px solid rgba(166,69,47,0.35)",
+                          borderRadius: 8, background: "transparent", color: "var(--rust)", cursor: "pointer",
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {room && (
+                  <div style={{ marginTop: 8, fontSize: 12.5, color: "var(--ink70)" }}>
+                    {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(rate)}</strong> · {nights} night{nights > 1 ? "s" : ""} ·
+                    Total: <strong>{currency(subtotal)}</strong>
+                  </div>
+                )}
+                {ticket && (
+                  <div style={{ marginTop: 8, background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}>
+                    ⚠ <strong>Room {room?.number} has an open maintenance issue:</strong> "{ticket.issue}" (Priority: {ticket.priority}, Status: {ticket.status})
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+        {canAddRoom && (
+          <Button variant="ghost" onClick={addRoomRow}>
+            + Add another room
+          </Button>
+        )}
+        {roomRows.length > 1 && rowDetails.some((d) => d.room) && (
+          <div style={{ marginTop: 4, fontSize: 13, textAlign: "right" }}>
+            Grand total ({roomRows.length} rooms): <strong>{currency(grandTotal)}</strong>
+          </div>
+        )}
       </div>
-      {selectedRoom && (
-        <div style={{ marginTop: 10, background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "8px 12px", fontSize: 12.5 }}>
-          {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(previewRate)}</strong> · {nights} night{nights > 1 ? "s" : ""} ·
-          Total: <strong>{currency(previewRate * nights)}</strong>
-        </div>
-      )}
-      {activeTicket && (
-        <div style={{ marginTop: 10, background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5 }}>
-          ⚠ <strong>Room {selectedRoom?.number} has an open maintenance issue:</strong> "{activeTicket.issue}" (Priority: {activeTicket.priority}, Status: {activeTicket.status})
-        </div>
-      )}
       <div className="grid-2" style={{ marginTop: 14 }}>
         <Field label="Booking source">
           <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -729,7 +877,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
             ))}
           </select>
         </Field>
-        <Field label="Advance / deposit">
+        <Field label={roomRows.length > 1 ? "Advance / deposit (applied to first room only)" : "Advance / deposit"}>
           <input className="input" type="number" value={deposit} onChange={(e) => setDeposit(e.target.value)} />
         </Field>
       </div>
@@ -745,7 +893,13 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
         </div>
       )}
       <div style={{ marginTop: 14 }}>
-        <Field label="Booking ID / reference (required — shows on bill) *">
+        <Field
+          label={
+            roomRows.length > 1
+              ? "Booking ID / reference (required — shows on bill; \"-2\", \"-3\"… added per extra room) *"
+              : "Booking ID / reference (required — shows on bill) *"
+          }
+        >
           <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} placeholder="e.g. your own ledger number, OTA ref" required />
         </Field>
       </div>
@@ -758,7 +912,7 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button disabled={busy || availableForDates.length === 0} onClick={submit}>
+        <Button disabled={busy || availableForDates.length === 0 || roomRows.some((r) => !r.roomId)} onClick={submit}>
           Create booking
         </Button>
       </div>
@@ -1148,11 +1302,16 @@ function pdfMoney(n) {
   return `Rs. ${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
-function downloadBookingConfirmation(booking, guest, room, settings) {
+// entries: [{ booking, room }] — one per room. All entries share the same
+// guest/check-in/check-out/source; only room + per-room charges differ. A
+// single-room booking just passes a 1-length array.
+function downloadBookingConfirmation(entries, guest, settings) {
   const doc = new jsPDF();
   const NAVY = [22, 35, 58];
   const BRASS = [184, 134, 63];
   const LIGHT = [246, 241, 231];
+  const first = entries[0].booking;
+  const multi = entries.length > 1;
 
   doc.setFillColor(...NAVY);
   doc.rect(0, 0, 210, 38, "F");
@@ -1177,7 +1336,7 @@ function downloadBookingConfirmation(booking, guest, room, settings) {
   doc.setFontSize(9);
   doc.setTextColor(220, 220, 225);
   doc.text(`Date: ${fmtDate(todayISO())}`, 196, 24, { align: "right" });
-  doc.text(`Booking ref: ${booking.booking_ref || booking.id.slice(0, 8).toUpperCase()}`, 196, 30, { align: "right" });
+  doc.text(`Booking ref: ${first.booking_ref || first.id.slice(0, 8).toUpperCase()}`, 196, 30, { align: "right" });
 
   doc.setFillColor(...LIGHT);
   doc.roundedRect(14, 46, 182, 32, 2, 2, "F");
@@ -1190,24 +1349,33 @@ function downloadBookingConfirmation(booking, guest, room, settings) {
   doc.setTextColor(70, 83, 107);
   doc.text(guest?.phone || "", 20, 61);
   if (guest?.email) doc.text(guest.email, 20, 67);
-  doc.text(`Room ${room ? room.number : "—"} · ${room ? room.type : ""}`, 110, 55);
-  doc.text(`${fmtDate(booking.check_in)}  to  ${fmtDate(booking.check_out)}  (${booking.nights} night${booking.nights > 1 ? "s" : ""})`, 110, 61);
+  const roomsLabel = entries.map(({ room }) => (room ? `${room.number} (${room.type})` : "—")).join(", ");
+  doc.text(`Room${multi ? "s" : ""}: ${roomsLabel}`, 110, 55);
+  doc.text(`${fmtDate(first.check_in)}  to  ${fmtDate(first.check_out)}  (${first.nights} night${first.nights > 1 ? "s" : ""})`, 110, 61);
+  const totalGuests = entries.reduce((s, { booking }) => s + 1 + (booking.co_guests_count || 0), 0);
   doc.text(
-    `${1 + (booking.co_guests_count || 0)} guest${booking.co_guests_count ? "s" : ""}${booking.source ? `  ·  Source: ${booking.source}` : ""}`,
+    `${totalGuests} guest${totalGuests > 1 ? "s" : ""}${first.source ? `  ·  Source: ${first.source}` : ""}`,
     110,
     67
   );
 
+  const bodyRows = entries.flatMap(({ booking, room }) => {
+    const rows = [
+      [
+        `Room ${room ? room.number : "—"} charges (${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""})`,
+        pdfMoney(booking.subtotal ?? booking.total),
+      ],
+    ];
+    if (booking.deposit > 0) {
+      rows.push([`Advance / deposit received (${booking.deposit_mode || "Cash"})`, pdfMoney(booking.deposit)]);
+    }
+    return rows;
+  });
+
   autoTable(doc, {
     startY: 88,
     head: [["Description", "Amount"]],
-    body: [
-      [
-        `Room charges (${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""})`,
-        pdfMoney(booking.subtotal ?? booking.total),
-      ],
-      ...(booking.deposit > 0 ? [[`Advance / deposit received (${booking.deposit_mode || "Cash"})`, pdfMoney(booking.deposit)]] : []),
-    ],
+    body: bodyRows,
     theme: "plain",
     styles: { fontSize: 10, textColor: NAVY, cellPadding: { top: 4, bottom: 4, left: 4, right: 4 } },
     headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold" },
@@ -1221,14 +1389,17 @@ function downloadBookingConfirmation(booking, guest, room, settings) {
   doc.line(120, y, 196, y);
   y += 7;
 
+  const grandTotal = entries.reduce((s, { booking }) => s + (booking.total || 0), 0);
+  const totalPaid = entries.reduce((s, { booking }) => s + (booking.paid_amount || 0), 0);
+
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(...NAVY);
-  doc.text("Total", 120, y);
-  doc.text(pdfMoney(booking.total), 196, y, { align: "right" });
+  doc.text(multi ? "Grand total" : "Total", 120, y);
+  doc.text(pdfMoney(grandTotal), 196, y, { align: "right" });
   y += 8;
 
-  const balance = booking.total - (booking.paid_amount || 0);
+  const balance = grandTotal - totalPaid;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9.5);
   doc.setTextColor(70, 83, 107);
@@ -1246,5 +1417,5 @@ function downloadBookingConfirmation(booking, guest, room, settings) {
   doc.setFontSize(7.5);
   doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y + 6, { align: "right" });
 
-  doc.save(`booking_confirmation_${(guest?.name || "guest").replace(/\s+/g, "_")}_${booking.check_in}.pdf`);
+  doc.save(`booking_confirmation_${(guest?.name || "guest").replace(/\s+/g, "_")}_${first.check_in}.pdf`);
 }
