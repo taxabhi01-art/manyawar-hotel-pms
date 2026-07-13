@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import {
   SectionTitle,
   Field,
@@ -33,6 +35,7 @@ import {
   uploadIdProof,
   getIdProofSignedUrl,
   logActivity,
+  getSettings,
 } from "../lib/api.js";
 
 export default function Bookings({ rooms, guests, bookings, coGuests, maintenanceTickets, highlightId, onOpenCheckIn, onOpenCheckOut, reload }) {
@@ -71,7 +74,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     const occupancy = 1 + (coGuestsCount || 0);
     const rate = computeRoomRate(room, occupancy);
     const subtotal = rate * nights;
-    await addBooking({
+    const { data: newBooking } = await addBooking({
       guest_id: guestId,
       room_id: roomId,
       check_in: checkIn,
@@ -94,6 +97,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     setBusy(false);
     setModal(null);
     reload();
+    // Auto-generate the confirmation PDF the moment the booking is created —
+    // staff don't have to remember to come back for it separately.
+    if (newBooking) {
+      const { data: settings } = await getSettings();
+      downloadBookingConfirmation(newBooking, fullGuest, room, settings || {});
+    }
     if (fullGuest?.phone) {
       setConfirmSendModal({ guest: fullGuest, room, checkIn, checkOut, total: subtotal });
     }
@@ -1125,4 +1134,112 @@ function GuestDetailModal({ booking, guest, coGuests, onClose }) {
       </div>
     </Modal>
   );
+}
+
+// ---------------------------------------------------------------
+// BOOKING CONFIRMATION PDF — generated the moment a booking is created
+// ---------------------------------------------------------------
+function pdfMoney(n) {
+  return `Rs. ${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
+function downloadBookingConfirmation(booking, guest, room, settings) {
+  const doc = new jsPDF();
+  const NAVY = [22, 35, 58];
+  const BRASS = [184, 134, 63];
+  const LIGHT = [246, 241, 231];
+
+  doc.setFillColor(...NAVY);
+  doc.rect(0, 0, 210, 38, "F");
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(19);
+  doc.text(settings.hotel_name || "MANYAWAR HOTEL", 14, 17);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(220, 220, 225);
+  const addrLine = [settings.address, settings.phone ? `Ph: ${settings.phone}` : null].filter(Boolean).join("   ·   ");
+  if (addrLine) doc.text(addrLine, 14, 24);
+  if (settings.gst_number) doc.text(`GSTIN: ${settings.gst_number}`, 14, 30);
+
+  doc.setTextColor(...BRASS);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text("BOOKING CONFIRMATION", 196, 17, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(220, 220, 225);
+  doc.text(`Date: ${fmtDate(todayISO())}`, 196, 24, { align: "right" });
+  doc.text(`Booking ref: ${booking.booking_ref || booking.id.slice(0, 8).toUpperCase()}`, 196, 30, { align: "right" });
+
+  doc.setFillColor(...LIGHT);
+  doc.roundedRect(14, 46, 182, 32, 2, 2, "F");
+  doc.setTextColor(...NAVY);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text(guest ? guest.name : "Guest", 20, 55);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(70, 83, 107);
+  doc.text(guest?.phone || "", 20, 61);
+  if (guest?.email) doc.text(guest.email, 20, 67);
+  doc.text(`Room ${room ? room.number : "—"} · ${room ? room.type : ""}`, 110, 55);
+  doc.text(`${fmtDate(booking.check_in)}  to  ${fmtDate(booking.check_out)}  (${booking.nights} night${booking.nights > 1 ? "s" : ""})`, 110, 61);
+  doc.text(
+    `${1 + (booking.co_guests_count || 0)} guest${booking.co_guests_count ? "s" : ""}${booking.source ? `  ·  Source: ${booking.source}` : ""}`,
+    110,
+    67
+  );
+
+  autoTable(doc, {
+    startY: 88,
+    head: [["Description", "Amount"]],
+    body: [
+      [
+        `Room charges (${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""})`,
+        pdfMoney(booking.subtotal ?? booking.total),
+      ],
+      ...(booking.deposit > 0 ? [[`Advance / deposit received (${booking.deposit_mode || "Cash"})`, pdfMoney(booking.deposit)]] : []),
+    ],
+    theme: "plain",
+    styles: { fontSize: 10, textColor: NAVY, cellPadding: { top: 4, bottom: 4, left: 4, right: 4 } },
+    headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold" },
+    columnStyles: { 1: { halign: "right" } },
+    margin: { left: 14, right: 14 },
+  });
+
+  let y = doc.lastAutoTable.finalY + 4;
+  doc.setDrawColor(...NAVY);
+  doc.setLineWidth(0.3);
+  doc.line(120, y, 196, y);
+  y += 7;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(...NAVY);
+  doc.text("Total", 120, y);
+  doc.text(pdfMoney(booking.total), 196, y, { align: "right" });
+  y += 8;
+
+  const balance = booking.total - (booking.deposit || 0);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  doc.setTextColor(70, 83, 107);
+  doc.text("Payable at checkout", 120, y);
+  doc.text(pdfMoney(Math.max(0, balance)), 196, y, { align: "right" });
+  y += 14;
+
+  doc.setDrawColor(220, 220, 220);
+  doc.line(14, y, 196, y);
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(9);
+  doc.setTextColor(120, 120, 120);
+  doc.text("This confirms your reservation. We look forward to hosting you!", 14, y + 6);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y + 6, { align: "right" });
+
+  doc.save(`booking_confirmation_${(guest?.name || "guest").replace(/\s+/g, "_")}_${booking.check_in}.pdf`);
 }
