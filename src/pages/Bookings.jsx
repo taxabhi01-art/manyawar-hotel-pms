@@ -141,6 +141,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     const discount = Math.min(booking.discount || 0, subtotal);
     const total = computeBookingTotal({ ...booking, subtotal, discount });
     await updateBooking(booking.id, {
+      room_id: room ? room.id : booking.room_id,
       check_in: checkIn,
       check_out: checkOut,
       nights,
@@ -152,7 +153,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       co_guests_count: Number(coGuestsCount) || 0,
       booking_ref: bookingRef.trim() || null,
     });
-    logActivity("Booking edited", `${guestOf(booking.guest_id)?.name || "Guest"} — Room ${roomOf(booking.room_id)?.number || "—"}`);
+    logActivity("Booking edited", `${guestOf(booking.guest_id)?.name || "Guest"} — Room ${room?.number || roomOf(booking.room_id)?.number || "—"}`);
     setEditModal(null);
     reload();
   };
@@ -315,7 +316,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         <EditBookingModal
           booking={editModal}
           bookings={bookings}
-          rooms={rooms}
+          rooms={
+            bookableRooms.some((r) => r.id === editModal.room_id)
+              ? bookableRooms
+              : [...bookableRooms, roomOf(editModal.room_id)].filter(Boolean)
+          }
           onClose={() => setEditModal(null)}
           onSave={(d) => saveBookingEdit(editModal, d)}
         />
@@ -753,13 +758,29 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
   const [source, setSource] = useState(booking.source || BOOKING_SOURCES[0]);
   const [coGuestsCount, setCoGuestsCount] = useState(booking.co_guests_count || 0);
   const [bookingRef, setBookingRef] = useState(booking.booking_ref || "");
-  const room = rooms.find((r) => r.id === booking.room_id);
+
+  // Only rooms with no overlapping booking for the CHOSEN dates show up here —
+  // same pattern as the new-booking form. The booking's own record is excluded
+  // from the overlap check so its current room stays selectable.
+  const availableForDates = useMemo(
+    () => rooms.filter((r) => isRoomAvailableForDates(r.id, checkIn, checkOut, bookings, booking.id, r.status)),
+    [rooms, bookings, checkIn, checkOut, booking.id]
+  );
+  const [roomId, setRoomId] = useState(booking.room_id);
+  useEffect(() => {
+    if (!availableForDates.find((r) => r.id === roomId)) {
+      setRoomId(availableForDates[0]?.id || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkIn, checkOut]);
+
+  const room = availableForDates.find((r) => r.id === roomId);
   const nights = nightsBetween(checkIn, checkOut);
   const occupancy = 1 + (Number(coGuestsCount) || 0);
   const newRate = room ? computeRoomRate(room, occupancy) : booking.rate;
   const newSubtotal = newRate * nights;
   const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal });
-  const available = isRoomAvailableForDates(booking.room_id, checkIn, checkOut, bookings, booking.id);
+  const available = !!roomId && isRoomAvailableForDates(roomId, checkIn, checkOut, bookings, booking.id);
 
   return (
     <Modal title="Edit booking" onClose={onClose} width={440}>
@@ -769,6 +790,21 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
         </Field>
         <Field label="Check-out">
           <input className="input" type="date" min={checkIn} value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+        </Field>
+        <Field label={`Room (${availableForDates.length} available for these dates)`}>
+          {availableForDates.length === 0 ? (
+            <p style={{ fontSize: 12.5, color: "var(--rust)", margin: "4px 0 0" }}>
+              No rooms free for this range.
+            </p>
+          ) : (
+            <select className="input" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+              {availableForDates.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.number} · {r.type}
+                </option>
+              ))}
+            </select>
+          )}
         </Field>
         <Field label="Co-guests">
           <input
