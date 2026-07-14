@@ -5,6 +5,8 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
   const [reservedModalOpen, setReservedModalOpen] = useState(false);
   const [arrivalsModalOpen, setArrivalsModalOpen] = useState(false);
   const [departuresModalOpen, setDeparturesModalOpen] = useState(false);
+  const [arrivalsTomorrowModalOpen, setArrivalsTomorrowModalOpen] = useState(false);
+  const [departuresTomorrowModalOpen, setDeparturesTomorrowModalOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30000);
@@ -101,28 +103,29 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
         <>
           <SectionTitle eyebrow="Reminder" title="Tomorrow's schedule" />
           <div className="stat-grid" style={{ marginBottom: 20 }}>
-            <div className="stat-card">
-              <div className="label">Arriving tomorrow</div>
-              <div className="value">{checkinsTomorrow.length}</div>
-            </div>
-            <div className="stat-card">
-              <div className="label">Departing tomorrow</div>
-              <div className="value">{checkoutsTomorrow.length}</div>
-            </div>
+            <button
+              className="stat-card"
+              onClick={() => checkinsTomorrow.length > 0 && setArrivalsTomorrowModalOpen(true)}
+              style={{ all: "unset", cursor: checkinsTomorrow.length > 0 ? "pointer" : "default", display: "block" }}
+            >
+              <div className="stat-card">
+                <div className="label">Arriving tomorrow</div>
+                <div className="value">{checkinsTomorrow.length}</div>
+                {checkinsTomorrow.length > 0 && <div className="sub">Click to see details</div>}
+              </div>
+            </button>
+            <button
+              className="stat-card"
+              onClick={() => checkoutsTomorrow.length > 0 && setDeparturesTomorrowModalOpen(true)}
+              style={{ all: "unset", cursor: checkoutsTomorrow.length > 0 ? "pointer" : "default", display: "block" }}
+            >
+              <div className="stat-card">
+                <div className="label">Departing tomorrow</div>
+                <div className="value">{checkoutsTomorrow.length}</div>
+                {checkoutsTomorrow.length > 0 && <div className="sub">Click to see details</div>}
+              </div>
+            </button>
           </div>
-          {checkoutsTomorrow.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              {checkoutsTomorrow.map((b) => {
-                const g = guests.find((x) => x.id === b.guest_id);
-                const r = rooms.find((x) => x.id === b.room_id);
-                return (
-                  <div className="card" key={b.id} style={{ padding: "8px 14px" }}>
-                    <span style={{ fontSize: 13 }}>{g ? g.name : "Guest"} — Room {r ? r.number : "—"}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </>
       )}
 
@@ -148,6 +151,24 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
             setDeparturesModalOpen(false);
             onOpenCheckOut(b);
           }}
+        />
+      )}
+      {arrivalsTomorrowModalOpen && (
+        <TomorrowListModal
+          title="Arriving tomorrow"
+          bookings={checkinsTomorrow}
+          guests={guests}
+          rooms={rooms}
+          onClose={() => setArrivalsTomorrowModalOpen(false)}
+        />
+      )}
+      {departuresTomorrowModalOpen && (
+        <TomorrowListModal
+          title="Departing tomorrow"
+          bookings={checkoutsTomorrow}
+          guests={guests}
+          rooms={rooms}
+          onClose={() => setDeparturesTomorrowModalOpen(false)}
         />
       )}
 
@@ -255,6 +276,38 @@ function ArrivalsModal({ bookings, guests, rooms, onClose, onCheckIn }) {
                 </div>
               </div>
               <Button onClick={() => onCheckIn(b)}>Check in</Button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+// Plain listing for tomorrow's arrivals/departures — no check-in/out
+// action, this is a heads-up view, not a workflow (see ArrivalsModal /
+// DeparturesModal above for the today-and-actionable equivalents).
+function TomorrowListModal({ title, bookings, guests, rooms, onClose }) {
+  return (
+    <Modal title={title} onClose={onClose} width={460}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {bookings.map((b) => {
+          const g = guests.find((x) => x.id === b.guest_id);
+          const r = rooms.find((x) => x.id === b.room_id);
+          return (
+            <div key={b.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, fontWeight: 600 }}>
+                <span>{g ? g.name : "Guest removed"}</span>
+                <span style={{ fontFamily: "var(--font-mono)" }}>Room {r ? r.number : "—"}</span>
+              </div>
+              {b.booking_ref && (
+                <div style={{ fontSize: 12, color: "var(--ink45)", marginTop: 2, fontFamily: "var(--font-mono)" }}>Ref: {b.booking_ref}</div>
+              )}
             </div>
           );
         })}
