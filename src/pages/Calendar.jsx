@@ -7,9 +7,12 @@ const MONTH_NAMES = [
 ];
 
 export default function CalendarPage({ bookings, guests, rooms }) {
-  const today = new Date();
-  const [year, setYear] = useState(today.getFullYear());
-  const [month, setMonth] = useState(today.getMonth()); // 0-indexed
+  // Year/month derived from IST "today", not the device's system timezone.
+  const todayIso = todayISO();
+  const todayYear = Number(todayIso.slice(0, 4));
+  const todayMonthIdx = Number(todayIso.slice(5, 7)) - 1;
+  const [year, setYear] = useState(todayYear);
+  const [month, setMonth] = useState(todayMonthIdx); // 0-indexed
   const [dayModal, setDayModal] = useState(null); // ISO date string
 
   const activeBookings = bookings.filter((b) => b.status === "reserved" || b.status === "checked-in");
@@ -46,11 +49,9 @@ export default function CalendarPage({ bookings, guests, rooms }) {
     }
   };
   const goToday = () => {
-    setYear(today.getFullYear());
-    setMonth(today.getMonth());
+    setYear(todayYear);
+    setMonth(todayMonthIdx);
   };
-
-  const iso = today.toISOString().slice(0, 10);
 
   return (
     <div>
@@ -81,7 +82,7 @@ export default function CalendarPage({ bookings, guests, rooms }) {
         {cells.map((cellIso, i) => {
           if (!cellIso) return <div key={i} />;
           const dayBookings = bookingsOnDay(cellIso);
-          const isToday = cellIso === iso;
+          const isToday = cellIso === todayIso;
           const dayNum = Number(cellIso.slice(-2));
           return (
             <button

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, EXPENSE_CATEGORIES, PAYMENT_MODES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, addMonthsISO, EXPENSE_CATEGORIES, PAYMENT_MODES } from "../components.jsx";
 import { addExpense, updateExpense, deleteExpense, addStaff, logActivity, uploadExpenseReceipt, getExpenseReceiptSignedUrl } from "../lib/api.js";
 
 export default function Finance({ bookings, guests, expenses, staff, reload }) {
@@ -42,8 +42,8 @@ export default function Finance({ bookings, guests, expenses, staff, reload }) {
 
   // ---- Cash flow for the selected date range — by payment mode, expenses, net, and pending ----
   const cfPreset = (fromDaysAgo, toDaysAgo = 0) => {
-    setCfStart(new Date(Date.now() - fromDaysAgo * 86400000).toISOString().slice(0, 10));
-    setCfEnd(new Date(Date.now() - toDaysAgo * 86400000).toISOString().slice(0, 10));
+    setCfStart(addDaysISO(today, -fromDaysAgo));
+    setCfEnd(addDaysISO(today, -toDaysAgo));
   };
   const rangePayments = useMemo(
     () => allPayments.filter((p) => p.paid_on >= cfStart && p.paid_on <= cfEnd),
@@ -87,15 +87,12 @@ export default function Finance({ bookings, guests, expenses, staff, reload }) {
   const chartData = useMemo(() => {
     const buckets = [];
     if (granularity === "daily") {
-      for (let i = 29; i >= 0; i--) buckets.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+      for (let i = 29; i >= 0; i--) buckets.push(addDaysISO(today, -i));
     } else if (granularity === "monthly") {
-      for (let i = monthsBack - 1; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
-        buckets.push(d.toISOString().slice(0, 7));
-      }
+      const thisMonth = today.slice(0, 7);
+      for (let i = monthsBack - 1; i >= 0; i--) buckets.push(addMonthsISO(thisMonth, -i));
     } else {
-      const thisYear = new Date().getFullYear();
+      const thisYear = Number(today.slice(0, 4));
       for (let i = 4; i >= 0; i--) buckets.push(String(thisYear - i));
     }
     const keyFor = (dateStr) => {

@@ -1,16 +1,21 @@
-import React, { useState } from "react";
-import { SectionTitle, Pill, Button, Modal, currency, fmtDate, todayISO, STATUS } from "../components.jsx";
+import React, { useState, useEffect } from "react";
+import { SectionTitle, Pill, Button, Modal, currency, fmtDate, fmtDateTimeDayIST, todayISO, addDaysISO, STATUS } from "../components.jsx";
 
 export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheckIn, onOpenCheckOut }) {
   const [reservedModalOpen, setReservedModalOpen] = useState(false);
   const [arrivalsModalOpen, setArrivalsModalOpen] = useState(false);
   const [departuresModalOpen, setDeparturesModalOpen] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
   const today = todayISO();
   const occupied = rooms.filter((r) => r.status === "occupied").length;
   const occupancy = rooms.length ? Math.round((occupied / rooms.length) * 100) : 0;
   const checkinsToday = bookings.filter((b) => b.check_in === today && b.status === "reserved");
   const checkoutsToday = bookings.filter((b) => b.check_out === today && b.status === "checked-in");
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const tomorrow = addDaysISO(today, 1);
   const checkinsTomorrow = bookings.filter((b) => b.check_in === tomorrow && b.status === "reserved");
   const checkoutsTomorrow = bookings.filter((b) => b.check_out === tomorrow && b.status === "checked-in");
   const monthPrefix = today.slice(0, 7);
@@ -63,7 +68,15 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
         </div>
       )}
 
-      <SectionTitle eyebrow="Front desk" title="Today at a glance" />
+      <SectionTitle
+        eyebrow="Front desk"
+        title="Today at a glance"
+        action={
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--ink70)" }}>
+            {fmtDateTimeDayIST(now)}
+          </div>
+        }
+      />
       <div className="stat-grid">
         {stats.map((s) =>
           s.onClick ? (

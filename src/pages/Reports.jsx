@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
-import { SectionTitle, Field, Button, Modal, currency, todayISO } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, currency, todayISO, addDaysISO, addMonthsISO } from "../components.jsx";
 
 export default function Reports({ rooms, guests, bookings, staff, attendance }) {
   const [exportOpen, setExportOpen] = useState(false);
@@ -42,11 +42,8 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
   // "how does this quarter/half-year compare" style decisions.
   const monthlyChart = useMemo(() => {
     const months = [];
-    for (let i = monthsBack - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - i);
-      months.push(d.toISOString().slice(0, 7));
-    }
+    const thisMonth = today.slice(0, 7);
+    for (let i = monthsBack - 1; i >= 0; i--) months.push(addMonthsISO(thisMonth, -i));
     return months.map((m) => ({
       month: m.slice(2),
       revenue: (bookings || []).reduce(
@@ -283,14 +280,14 @@ export default function Reports({ rooms, guests, bookings, staff, attendance }) 
 }
 
 function daysAgo(n) {
-  return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  return addDaysISO(todayISO(), -n);
 }
 function lastMonthBounds(todayIso) {
-  const d = new Date(todayIso + "T00:00:00");
-  const firstOfThisMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-  const lastOfPrevMonth = new Date(firstOfThisMonth - 86400000);
-  const firstOfPrevMonth = new Date(lastOfPrevMonth.getFullYear(), lastOfPrevMonth.getMonth(), 1);
-  return { start: firstOfPrevMonth.toISOString().slice(0, 10), end: lastOfPrevMonth.toISOString().slice(0, 10) };
+  const thisMonth = todayIso.slice(0, 7);
+  const prevMonth = addMonthsISO(thisMonth, -1);
+  const [y, m] = prevMonth.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of month m (1-indexed) = last day of prevMonth
+  return { start: `${prevMonth}-01`, end: `${prevMonth}-${String(lastDay).padStart(2, "0")}` };
 }
 function sumPaidInRange(bookings, start, end) {
   let total = 0;

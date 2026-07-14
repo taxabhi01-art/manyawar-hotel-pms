@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, whatsappLink, computeBookingTotal, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, whatsappLink, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
 import { addPayment, updatePayment, deletePayment, updateBooking, getSettings, logActivity } from "../lib/api.js";
 
 export default function Billing({ bookings, guests, rooms, inventoryUsage, role, autoOpenPaymentFor, reload }) {
   const [payModal, setPayModal] = useState(null);
-  const [discountModal, setDiscountModal] = useState(null);
   const [editPaymentModal, setEditPaymentModal] = useState(null);
   const [settings, setSettings] = useState(null);
   const [search, setSearch] = useState("");
@@ -66,31 +65,15 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
     reload();
   };
 
-  const applyDiscount = async (booking, discount, reason) => {
-    const subtotal = booking.subtotal ?? booking.total;
-    const clamped = Math.max(0, Math.min(subtotal, discount));
-    const total = computeBookingTotal({ ...booking, subtotal, discount: clamped });
-    await updateBooking(booking.id, { discount: clamped, discount_reason: reason, total });
-    if (clamped > 0) {
-      const g = guests.find((x) => x.id === booking.guest_id);
-      logActivity("Discount applied", `${currency(clamped)} on booking for ${g ? g.name : "guest"}${reason ? ` — ${reason}` : ""}`);
-    }
-    setDiscountModal(null);
-    reload();
-  };
-
-  // Deposit can either be applied toward the bill (reduces balance owed) or
-  // handed back to the guest in cash — these are tracked separately so the
-  // books stay accurate.
-  const adjustDepositToBill = async (booking) => {
-    if (!confirm(`Adjust ${currency(booking.deposit)} deposit against this bill?`)) return;
-    const newPaid = Math.min(booking.total, (booking.paid_amount || 0) + booking.deposit);
-    await updateBooking(booking.id, { paid_amount: newPaid, deposit_status: "adjusted" });
-    reload();
-  };
+  // The deposit is already folded into paid_amount the moment the booking is
+  // created (see createBooking in Bookings.jsx) — there's no separate "adjust
+  // to bill" step needed anymore. The only deposit action left is refunding
+  // it back to the guest in cash, which has to reverse that same amount back
+  // out of paid_amount to keep the books accurate.
   const refundDepositToGuest = async (booking) => {
     if (!confirm(`Mark ${currency(booking.deposit)} deposit as refunded to guest?`)) return;
-    await updateBooking(booking.id, { deposit_status: "refunded", deposit_refunded: true });
+    const newPaid = Math.max(0, (booking.paid_amount || 0) - booking.deposit);
+    await updateBooking(booking.id, { paid_amount: newPaid, deposit_status: "refunded", deposit_refunded: true });
     const g = guests.find((x) => x.id === booking.guest_id);
     logActivity("Deposit refunded", `${currency(booking.deposit)} to ${g ? g.name : "guest"}`);
     reload();
@@ -115,8 +98,9 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
     });
   const totalOutstanding = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
   const periodPreset = (fromDaysAgo, toDaysAgo = 0) => {
-    setPeriodFrom(new Date(Date.now() - fromDaysAgo * 86400000).toISOString().slice(0, 10));
-    setPeriodTo(new Date(Date.now() - toDaysAgo * 86400000).toISOString().slice(0, 10));
+    const today = todayISO();
+    setPeriodFrom(addDaysISO(today, -fromDaysAgo));
+    setPeriodTo(addDaysISO(today, -toDaysAgo));
   };
 
   return (
@@ -156,7 +140,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
           const g = guests.find((x) => x.id === b.guest_id);
           const r = rooms.find((x) => x.id === b.room_id);
           const balance = b.total - b.paid_amount;
-          const depositStatus = b.deposit_status || (b.deposit_refunded ? "refunded" : "held");
+          const depositStatus = b.deposit_status || (b.deposit_refunded ? "refunded" : "adjusted");
           const items = inventoryUsage.filter((u) => u.booking_id === b.id);
           return (
             <div className="card" key={b.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
@@ -178,21 +162,16 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                 </div>
                 <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(b.paid_amount)}</span>
                 {b.deposit > 0 && (
-                  <span style={{ fontSize: 11.5, color: depositStatus === "held" ? "var(--brass)" : "var(--ink45)" }}>
-                    Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({depositStatus})
+                  <span style={{ fontSize: 11.5, color: depositStatus === "refunded" ? "var(--ink45)" : "var(--brass)" }}>
+                    Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({depositStatus}, already in Paid)
                   </span>
                 )}
                 <Pill color={balance <= 0 ? "#5f8863" : "#a6452f"}>{balance <= 0 ? "Settled" : `Due ${currency(balance)}`}</Pill>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {b.deposit > 0 && depositStatus === "held" && (
-                    <>
-                      <Button variant="ghost" onClick={() => adjustDepositToBill(b)}>
-                        Adjust deposit to bill
-                      </Button>
-                      <Button variant="ghost" onClick={() => refundDepositToGuest(b)}>
-                        Refund deposit
-                      </Button>
-                    </>
+                  {b.deposit > 0 && depositStatus !== "refunded" && (
+                    <Button variant="ghost" onClick={() => refundDepositToGuest(b)}>
+                      Refund deposit
+                    </Button>
                   )}
                   {g?.phone && (
                     <a
@@ -207,9 +186,6 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                   )}
                   <Button variant="ghost" onClick={() => downloadTaxInvoice(b, g, r, settings || {}, items)}>
                     Tax Invoice PDF
-                  </Button>
-                  <Button variant="ghost" onClick={() => setDiscountModal(b)}>
-                    Discount
                   </Button>
                   {balance > 0 && <Button onClick={() => setPayModal(b)}>Record payment</Button>}
                 </div>
@@ -254,9 +230,6 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
       )}
       {payModal && (
         <PaymentModal booking={payModal} onClose={() => setPayModal(null)} onSave={(lines, paidOn) => recordPayment(payModal, lines, paidOn)} />
-      )}
-      {discountModal && (
-        <DiscountModal booking={discountModal} onClose={() => setDiscountModal(null)} onSave={(d, r) => applyDiscount(discountModal, d, r)} />
       )}
       {editPaymentModal && (
         <EditPaymentModal
@@ -417,33 +390,6 @@ function EditPaymentModal({ payment, onClose, onSave }) {
   );
 }
 
-export function DiscountModal({ booking, onClose, onSave }) {
-  const subtotal = booking.subtotal ?? booking.total;
-  const [discount, setDiscount] = useState(booking.discount || 0);
-  const [reason, setReason] = useState(booking.discount_reason || "");
-  return (
-    <Modal title="Apply discount" onClose={onClose} width={380}>
-      <p style={{ fontSize: 13 }}>
-        Room total: <strong>{currency(subtotal)}</strong>
-      </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="Discount amount">
-          <input className="input" type="number" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} />
-        </Field>
-        <Field label="Reason (optional)">
-          <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} />
-        </Field>
-      </div>
-      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button onClick={() => onSave(discount, reason)}>Save discount</Button>
-      </div>
-    </Modal>
-  );
-}
-
 // ---------------------------------------------------------------
 // TAX INVOICE — the formal invoice with GST breakdown
 // ---------------------------------------------------------------
@@ -560,8 +506,8 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(...BRASS);
-    const status = booking.deposit_status || (booking.deposit_refunded ? "refunded" : "held");
-    doc.text(`Advance/deposit collected: ${pdfMoney(booking.deposit)} via ${booking.deposit_mode || "Cash"} (${status})`, 14, y);
+    const status = booking.deposit_status || (booking.deposit_refunded ? "refunded" : "adjusted");
+    doc.text(`Advance/deposit collected: ${pdfMoney(booking.deposit)} via ${booking.deposit_mode || "Cash"} (${status}, included in Amount paid below)`, 14, y);
     y += 10;
   }
 

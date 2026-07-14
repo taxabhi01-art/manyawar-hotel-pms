@@ -69,16 +69,44 @@ export function currency(n) {
   return `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
+// The whole app runs on India time regardless of the device it's viewed on
+// — every date/time display below pins to Asia/Kolkata explicitly instead
+// of trusting the browser's ambient system timezone.
+export const IST_TIMEZONE = "Asia/Kolkata";
+
 export function fmtDate(iso) {
   if (!iso) return "—";
-  const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+  // Date-only fields (check_in/check_out/...) have no inherent time — parse
+  // as UTC midnight (tz-agnostic) so formatting in IST never shifts the
+  // calendar day (IST is ahead of UTC, so UTC-midnight-of-day-X is always
+  // still day X once shown in IST).
+  const d = new Date(iso + "T00:00:00Z");
+  return d.toLocaleDateString("en-IN", { timeZone: IST_TIMEZONE, day: "2-digit", month: "short", year: "numeric" });
 }
 
 export function fmtDateTime(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("en-IN", { timeZone: IST_TIMEZONE, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+// Full "Tuesday, 14 Jul 2026 · 03:45 PM IST" style label for a live clock
+// (e.g. the Dashboard header).
+export function fmtDateTimeDayIST(date = new Date()) {
+  const datePart = date.toLocaleDateString("en-IN", {
+    timeZone: IST_TIMEZONE,
+    weekday: "long",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+  const timePart = date.toLocaleTimeString("en-IN", {
+    timeZone: IST_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${datePart} · ${timePart} IST`;
 }
 
 export const BOOKING_STATUS_COLORS = {
@@ -89,8 +117,11 @@ export const BOOKING_STATUS_COLORS = {
   "no-show": "#8a4a6b",
 };
 
+// "Today" per India time, not the viewer's/server's system timezone.
+// `toISOString()` is UTC — for the first ~5.5 hours of every IST day
+// (00:00–05:30 IST) that would silently report yesterday's date instead.
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA", { timeZone: IST_TIMEZONE }); // en-CA formats as YYYY-MM-DD
 }
 
 export function nightsBetween(a, b) {
@@ -98,11 +129,25 @@ export function nightsBetween(a, b) {
   return Math.max(1, Math.round(ms / 86400000));
 }
 
-// Two stay ranges overlap if one starts before the other ends (checkout day itself is free)
-function addDaysISO(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
+// Pure calendar-date arithmetic on a YYYY-MM-DD string — UTC-anchored (not
+// IST-anchored) on purpose: adding N days to a date-only value has no
+// timezone to it, and anchoring to UTC keeps it independent of the
+// browser's system timezone instead of drifting a day near local midnight.
+export function addDaysISO(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
+}
+
+// Pure integer month arithmetic on a "YYYY-MM" string — used for chart
+// bucketing (e.g. "6 months back"). Avoids Date-object month arithmetic,
+// which goes through the same UTC-vs-local ambiguity as day arithmetic.
+export function addMonthsISO(yearMonth, n) {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const total = y * 12 + (m - 1) + n;
+  const newY = Math.floor(total / 12);
+  const newM = (total % 12) + 1;
+  return `${newY}-${String(newM).padStart(2, "0")}`;
 }
 
 // A same-day (day-use) booking has checkIn === checkOut, which is a zero-width
@@ -221,8 +266,18 @@ export const EARLY_CHECKIN_GRACE_HOURS = 2; // fee applies if arriving 2+ hrs ea
 export const LATE_CHECKOUT_GRACE_HOURS = 1; // fee applies if leaving 1+ hrs late
 
 function hourNow() {
-  const now = new Date();
-  return now.getHours() + now.getMinutes() / 60;
+  // Explicit IST, not the device's system timezone (getHours()/getMinutes()
+  // would silently use whatever timezone the browser/server happens to be
+  // set to).
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: IST_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((p) => p.type === "hour").value);
+  const minute = Number(parts.find((p) => p.type === "minute").value);
+  return hour + minute / 60;
 }
 // Early check-in only counts if this is happening ON the booking's scheduled
 // check-in date AND more than 2 hours before the 12:00 PM standard time.

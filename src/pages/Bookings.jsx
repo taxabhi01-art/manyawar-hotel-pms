@@ -38,7 +38,6 @@ import {
   logActivity,
   getSettings,
 } from "../lib/api.js";
-import { DiscountModal } from "./Billing.jsx";
 
 // Multi-room bookings are stored as separate rows sharing the same guest +
 // dates (see createBooking below), with no explicit "which room is primary"
@@ -96,6 +95,7 @@ function describeBookingChanges(before, patch, roomOf) {
     { key: "check_in", label: "Check-in", format: fmtDate },
     { key: "check_out", label: "Check-out", format: fmtDate },
     { key: "rate", label: "Rate", format: currency },
+    { key: "discount", label: "Discount", format: currency },
     { key: "source", label: "Source", format: (v) => v || "—" },
     { key: "co_guests_count", label: "Co-guests", format: (v) => String(v ?? 0) },
     { key: "booking_ref", label: "Booking ref", format: (v) => v || "—" },
@@ -118,7 +118,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const [confirmSendModal, setConfirmSendModal] = useState(null);
   const [cancelModal, setCancelModal] = useState(null);
   const [changeRoomModal, setChangeRoomModal] = useState(null);
-  const [discountModal, setDiscountModal] = useState(null);
   const [filter, setFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -138,11 +137,23 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   // dates, source and booking ref are common to the whole submission; each
   // room becomes its own booking record (mirrors how check-in/checkout/edit
   // already operate per-booking, so a multi-room stay is just N sibling rows
-  // sharing guest_id + check_in + check_out). Deposit is only ever attached
-  // to the first room's record, and the booking ref gets a "-2", "-3", …
-  // suffix per extra room so refs stay unique without the guest having to
-  // type multiple references.
-  const createBooking = async ({ guest, rooms: roomSelections, checkIn, checkOut, source, deposit, depositMode, bookingRef, bookedOn }) => {
+  // sharing guest_id + check_in + check_out). Deposit and discount are only
+  // ever attached to the first room's record, and the booking ref gets a
+  // "-2", "-3", … suffix per extra room so refs stay unique without the
+  // guest having to type multiple references.
+  const createBooking = async ({
+    guest,
+    rooms: roomSelections,
+    checkIn,
+    checkOut,
+    source,
+    deposit,
+    depositMode,
+    discount,
+    discountReason,
+    bookingRef,
+    bookedOn,
+  }) => {
     setBusy(true);
     let guestId = guest.id;
     let fullGuest = guest;
@@ -163,6 +174,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       const occupancy = (i === 0 ? 1 : 0) + (coGuestsCount || 0);
       const rate = computeRoomRate(room, occupancy);
       const subtotal = rate * nights;
+      const clampedDiscount = i === 0 ? Math.max(0, Math.min(subtotal, discount || 0)) : 0;
+      const total = computeBookingTotal({ subtotal, discount: clampedDiscount });
+      const roomDeposit = i === 0 ? Math.max(0, Math.min(total, deposit || 0)) : 0;
       const ref = bookingRef ? (i === 0 ? bookingRef : `${bookingRef}-${i + 1}`) : null;
       const { data: newBooking } = await addBooking({
         guest_id: guestId,
@@ -173,12 +187,18 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         rate,
         nights,
         subtotal,
-        discount: 0,
-        total: subtotal,
-        paid_amount: 0,
+        discount: clampedDiscount,
+        discount_reason: clampedDiscount > 0 ? discountReason || null : null,
+        total,
+        // The deposit is folded straight into paid_amount — it's money
+        // already collected, so the balance shown everywhere (Billing,
+        // check-in/out, the confirmation PDF) is correct from the start
+        // instead of needing a separate "adjust to bill" step later.
+        paid_amount: roomDeposit,
         source: source || "Walk-in",
-        deposit: i === 0 ? deposit || 0 : 0,
-        deposit_mode: i === 0 && deposit > 0 ? depositMode || "Cash" : null,
+        deposit: roomDeposit,
+        deposit_mode: roomDeposit > 0 ? depositMode || "Cash" : null,
+        deposit_status: roomDeposit > 0 ? "adjusted" : null,
         deposit_refunded: false,
         co_guests_count: coGuestsCount || 0,
         booking_ref: ref,
@@ -234,15 +254,15 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     setChangeRoomModal(null);
     reload();
   };
-  const saveBookingEdit = async (booking, { checkIn, checkOut, source, coGuestsCount, bookingRef, room }) => {
+  const saveBookingEdit = async (booking, { checkIn, checkOut, source, coGuestsCount, bookingRef, room, discount, discountReason }) => {
     const nights = nightsBetween(checkIn, checkOut);
     // Secondary rooms in a multi-room group don't get the main guest's "+1"
     // — mirrors createBooking's occupancy rule (see isPrimaryInGroup).
     const occupancy = (isPrimaryInGroup(booking, bookings) ? 1 : 0) + (Number(coGuestsCount) || 0);
     const rate = room ? computeRoomRate(room, occupancy) : booking.rate;
     const subtotal = rate * nights;
-    const discount = Math.min(booking.discount || 0, subtotal);
-    const total = computeBookingTotal({ ...booking, subtotal, discount });
+    const clampedDiscount = Math.max(0, Math.min(subtotal, Number(discount) || 0));
+    const total = computeBookingTotal({ ...booking, subtotal, discount: clampedDiscount });
     const patch = {
       room_id: room ? room.id : booking.room_id,
       check_in: checkIn,
@@ -250,7 +270,8 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       nights,
       rate,
       subtotal,
-      discount,
+      discount: clampedDiscount,
+      discount_reason: clampedDiscount > 0 ? discountReason || null : null,
       total,
       source,
       co_guests_count: Number(coGuestsCount) || 0,
@@ -264,21 +285,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       logActivity("Booking edited", `(${g ? g.name : "Guest"}, Room ${r ? r.number : "—"}): ${changes.join(", ")}`);
     }
     setEditModal(null);
-    reload();
-  };
-
-  // Same discount logic as Billing.jsx's applyDiscount — lets staff apply a
-  // discount right from the Bookings tab instead of switching to Billing.
-  const applyDiscount = async (booking, discount, reason) => {
-    const subtotal = booking.subtotal ?? booking.total;
-    const clamped = Math.max(0, Math.min(subtotal, discount));
-    const total = computeBookingTotal({ ...booking, subtotal, discount: clamped });
-    await updateBooking(booking.id, { discount: clamped, discount_reason: reason, total });
-    if (clamped > 0) {
-      const g = guestOf(booking.guest_id);
-      logActivity("Discount applied", `${currency(clamped)} on booking for ${g ? g.name : "guest"}${reason ? ` — ${reason}` : ""}`);
-    }
-    setDiscountModal(null);
     reload();
   };
 
@@ -419,7 +425,14 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
               <span style={{ fontSize: 13, color: "var(--ink70)", width: 190 }}>
                 {fmtDate(b.check_in)} → {fmtDate(b.check_out)}
               </span>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, width: 90 }}>{currency(b.total)}</span>
+              <div style={{ width: 90 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{currency(b.total)}</div>
+                {b.discount > 0 && (
+                  <div style={{ fontSize: 10.5, color: "var(--brass)" }}>
+                    {currency(b.subtotal ?? b.total)} − {currency(b.discount)} off
+                  </div>
+                )}
+              </div>
               <span style={{ fontSize: 11.5, color: "var(--ink45)" }}>
                 {roomOccupancy} guest{roomOccupancy === 1 ? "" : "s"}
               </span>
@@ -430,8 +443,8 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
                 </div>
               )}
               {b.deposit > 0 && (
-                <span style={{ fontSize: 11.5, color: (b.deposit_status || "held") === "held" ? "var(--brass)" : "var(--ink45)" }}>
-                  Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({b.deposit_status || "held"})
+                <span style={{ fontSize: 11.5, color: b.deposit_status === "refunded" ? "var(--ink45)" : "var(--brass)" }}>
+                  Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({b.deposit_status || "adjusted"}, already in Paid)
                 </span>
               )}
               {b.items_total > 0 && (
@@ -454,9 +467,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
                 </Button>
                 <Button variant="ghost" onClick={() => downloadConfirmationFor(b)}>
                   Download confirmation
-                </Button>
-                <Button variant="ghost" onClick={() => setDiscountModal(b)}>
-                  Discount
                 </Button>
                 {b.status !== "checked-out" && b.status !== "cancelled" && b.status !== "no-show" && (
                   <Button variant="ghost" onClick={() => setEditModal(b)}>
@@ -542,13 +552,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           maintenanceTickets={maintenanceTickets}
           onClose={() => setChangeRoomModal(null)}
           onConfirm={(payload) => changeRoom(payload)}
-        />
-      )}
-      {discountModal && (
-        <DiscountModal
-          booking={discountModal}
-          onClose={() => setDiscountModal(null)}
-          onSave={(d, r) => applyDiscount(discountModal, d, r)}
         />
       )}
     </div>
@@ -701,6 +704,8 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   const [source, setSource] = useState(BOOKING_SOURCES[0]);
   const [deposit, setDeposit] = useState(0);
   const [depositMode, setDepositMode] = useState(PAYMENT_MODES[0]);
+  const [discount, setDiscount] = useState(0);
+  const [discountReason, setDiscountReason] = useState("");
   const [bookingRef, setBookingRef] = useState("");
   const [bookedOn, setBookedOn] = useState(todayISO());
 
@@ -820,6 +825,8 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
       source,
       deposit: Number(deposit) || 0,
       depositMode,
+      discount: Number(discount) || 0,
+      discountReason: discountReason.trim(),
       bookedOn,
       bookingRef: bookingRef.trim(),
     });
@@ -1009,6 +1016,21 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
           </Field>
         </div>
       )}
+      <div className="grid-2" style={{ marginTop: 14 }}>
+        <Field label={roomRows.length > 1 ? "Discount (applied to first room only)" : "Discount"}>
+          <input className="input" type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+        </Field>
+        {Number(discount) > 0 && (
+          <Field label="Discount reason (optional)">
+            <input className="input" value={discountReason} onChange={(e) => setDiscountReason(e.target.value)} />
+          </Field>
+        )}
+      </div>
+      {Number(discount) > 0 && rowDetails[0]?.room && (
+        <p style={{ fontSize: 12.5, color: "var(--brass)", marginTop: 6 }}>
+          Total after discount: <strong>{currency(grandTotal - Math.max(0, Math.min(rowDetails[0].subtotal, Number(discount) || 0)))}</strong>
+        </p>
+      )}
       <div style={{ marginTop: 14 }}>
         <Field
           label={
@@ -1042,6 +1064,8 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
   const [checkOut, setCheckOut] = useState(booking.check_out);
   const [source, setSource] = useState(booking.source || BOOKING_SOURCES[0]);
   const [coGuestsCount, setCoGuestsCount] = useState(booking.co_guests_count || 0);
+  const [discount, setDiscount] = useState(booking.discount || 0);
+  const [discountReason, setDiscountReason] = useState(booking.discount_reason || "");
   const [bookingRef, setBookingRef] = useState(booking.booking_ref || "");
 
   // Only rooms with no overlapping booking for the CHOSEN dates show up here —
@@ -1067,7 +1091,8 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
   const occupancy = (isPrimaryRoom ? 1 : 0) + (Number(coGuestsCount) || 0);
   const newRate = room ? computeRoomRate(room, occupancy) : booking.rate;
   const newSubtotal = newRate * nights;
-  const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal });
+  const clampedDiscount = Math.max(0, Math.min(newSubtotal, Number(discount) || 0));
+  const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal, discount: clampedDiscount });
   const available = !!roomId && isRoomAvailableForDates(roomId, checkIn, checkOut, bookings, booking.id);
 
   return (
@@ -1116,8 +1141,25 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
           <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} />
         </Field>
       </div>
+      <div className="grid-2" style={{ marginTop: 14 }}>
+        <Field label="Discount">
+          <input className="input" type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+        </Field>
+        {Number(discount) > 0 && (
+          <Field label="Discount reason (optional)">
+            <input className="input" value={discountReason} onChange={(e) => setDiscountReason(e.target.value)} />
+          </Field>
+        )}
+      </div>
       <p style={{ fontSize: 13, marginTop: 14 }}>
-        {nights} nights · {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(newRate)}</strong> · New total: <strong>{currency(newTotal)}</strong>
+        {nights} nights · {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(newRate)}</strong>
+        {clampedDiscount > 0 && (
+          <>
+            {" "}
+            · Discount: <strong>{currency(clampedDiscount)}</strong>
+          </>
+        )}{" "}
+        · New total: <strong>{currency(newTotal)}</strong>
       </p>
       {checkIn < todayISO() && (
         <p style={{ fontSize: 12, color: "var(--brass)" }}>
@@ -1138,7 +1180,7 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
           onClick={() => {
             if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
             if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
-            onSave({ checkIn, checkOut, source, coGuestsCount, bookingRef, room });
+            onSave({ checkIn, checkOut, source, coGuestsCount, bookingRef, room, discount, discountReason: discountReason.trim() });
           }}
         >
           Save
@@ -1500,7 +1542,7 @@ function downloadBookingConfirmation(entries, guest, settings) {
       ],
     ];
     if (booking.deposit > 0) {
-      rows.push([`Advance / deposit received (${booking.deposit_mode || "Cash"})`, pdfMoney(booking.deposit)]);
+      rows.push([`Advance / deposit received (${booking.deposit_mode || "Cash"}) — included in Amount paid below`, pdfMoney(booking.deposit)]);
     }
     return rows;
   });
