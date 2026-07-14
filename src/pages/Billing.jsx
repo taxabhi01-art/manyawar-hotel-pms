@@ -417,7 +417,7 @@ function EditPaymentModal({ payment, onClose, onSave }) {
   );
 }
 
-function DiscountModal({ booking, onClose, onSave }) {
+export function DiscountModal({ booking, onClose, onSave }) {
   const subtotal = booking.subtotal ?? booking.total;
   const [discount, setDiscount] = useState(booking.discount || 0);
   const [reason, setReason] = useState(booking.discount_reason || "");

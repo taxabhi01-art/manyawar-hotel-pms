@@ -20,6 +20,7 @@ import {
   isEarlyCheckin,
   isLateCheckout,
   whatsappLink,
+  splitInclusiveGst,
   BOOKING_SOURCES,
   PAYMENT_MODES,
   BOOKING_STATUS_COLORS,
@@ -37,6 +38,78 @@ import {
   logActivity,
   getSettings,
 } from "../lib/api.js";
+import { DiscountModal } from "./Billing.jsx";
+
+// Multi-room bookings are stored as separate rows sharing the same guest +
+// dates (see createBooking below), with no explicit "which room is primary"
+// flag in the DB. createBooking encodes it structurally in the booking_ref
+// instead: the first room's ref is left exactly as typed, and every other
+// room's ref is that SAME string with "-2", "-3", … appended. To find the
+// primary among a set of siblings, look for the one ref that no sibling's
+// ref is derived from — comparing pairs, not pattern-matching a single ref
+// in isolation, which would misfire on any user-typed ref that happens to
+// end in digits (e.g. "BUG-001" looks like it has a "-001" suffix on its
+// own, but isn't one unless a "BUG-001-N" sibling actually exists).
+function groupKeyOf(b) {
+  return `${b.guest_id}|${b.check_in}|${b.check_out}`;
+}
+function isDerivedRef(candidate, base) {
+  if (!candidate || !base) return false;
+  return candidate.startsWith(base + "-") && /^\d+$/.test(candidate.slice(base.length + 1));
+}
+function findPrimaryBooking(siblings) {
+  if (siblings.length <= 1) return siblings[0] || null;
+  return (
+    siblings.find((b) => !siblings.some((other) => other.id !== b.id && isDerivedRef(b.booking_ref, other.booking_ref))) ||
+    siblings[0]
+  );
+}
+function isPrimaryInGroup(booking, allBookings) {
+  const siblings = allBookings.filter((b) => groupKeyOf(b) === groupKeyOf(booking));
+  const primary = findPrimaryBooking(siblings);
+  return !primary || primary.id === booking.id;
+}
+// Orders a group's bookings primary-first, then by increasing ref suffix —
+// what the confirmation PDF and the "N guests" totals both assume.
+function orderGroupPrimaryFirst(siblings) {
+  const primary = findPrimaryBooking(siblings);
+  if (!primary) return siblings.slice();
+  const rank = (b) => {
+    if (b.id === primary.id) return 0;
+    if (isDerivedRef(b.booking_ref, primary.booking_ref)) {
+      return Number(b.booking_ref.slice(primary.booking_ref.length + 1));
+    }
+    return Number.MAX_SAFE_INTEGER;
+  };
+  return siblings.slice().sort((a, c) => rank(a) - rank(c));
+}
+
+// Diffs an edit-booking patch against the booking's previous values so the
+// Activity log records exactly what changed (old → new), not just a generic
+// "edited" note. Only fields present in `patch` and actually different are
+// included; derived fields (nights/subtotal/total/discount) are intentionally
+// left out — they follow from check-in/check-out/rate and would just repeat
+// the same edit as noise.
+function describeBookingChanges(before, patch, roomOf) {
+  const fields = [
+    { key: "room_id", label: "Room", format: (v) => roomOf(v)?.number || "—" },
+    { key: "check_in", label: "Check-in", format: fmtDate },
+    { key: "check_out", label: "Check-out", format: fmtDate },
+    { key: "rate", label: "Rate", format: currency },
+    { key: "source", label: "Source", format: (v) => v || "—" },
+    { key: "co_guests_count", label: "Co-guests", format: (v) => String(v ?? 0) },
+    { key: "booking_ref", label: "Booking ref", format: (v) => v || "—" },
+  ];
+  const changes = [];
+  for (const f of fields) {
+    if (!(f.key in patch)) continue;
+    const oldV = before[f.key];
+    const newV = patch[f.key];
+    if (oldV === newV) continue;
+    changes.push(`${f.label} ${f.format(oldV)} → ${f.format(newV)}`);
+  }
+  return changes;
+}
 
 export default function Bookings({ rooms, guests, bookings, coGuests, maintenanceTickets, highlightId, onOpenCheckIn, onOpenCheckOut, reload }) {
   const [modal, setModal] = useState(null);
@@ -45,6 +118,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const [confirmSendModal, setConfirmSendModal] = useState(null);
   const [cancelModal, setCancelModal] = useState(null);
   const [changeRoomModal, setChangeRoomModal] = useState(null);
+  const [discountModal, setDiscountModal] = useState(null);
   const [filter, setFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -83,7 +157,10 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     for (let i = 0; i < roomSelections.length; i++) {
       const { roomId, coGuestsCount } = roomSelections[i];
       const room = roomOf(roomId);
-      const occupancy = 1 + (coGuestsCount || 0);
+      // The main guest only physically occupies the FIRST room — only that
+      // room's occupancy (and rate tier) gets the "+1" for them. Every other
+      // room in the group is occupied by its own co-guests only.
+      const occupancy = (i === 0 ? 1 : 0) + (coGuestsCount || 0);
       const rate = computeRoomRate(room, occupancy);
       const subtotal = rate * nights;
       const ref = bookingRef ? (i === 0 ? bookingRef : `${bookingRef}-${i + 1}`) : null;
@@ -115,17 +192,8 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     setBusy(false);
     setModal(null);
     reload();
-    // Auto-generate one combined confirmation PDF the moment the booking is
-    // created — staff don't have to remember to come back for it separately,
-    // and a multi-room stay gets a single PDF instead of N popup downloads.
-    if (newBookings.length) {
-      const { data: settings } = await getSettings();
-      downloadBookingConfirmation(
-        newBookings.map((nb, i) => ({ booking: nb, room: roomsUsed[i] })),
-        fullGuest,
-        settings || {}
-      );
-    }
+    // Confirmation PDF is on-demand only now (via the "Download confirmation"
+    // button in the list) — no auto-download here.
     if (fullGuest?.phone && roomsUsed.length) {
       const grandTotal = newBookings.reduce((s, nb) => s + (nb.total || 0), 0);
       setConfirmSendModal({ guest: fullGuest, rooms: roomsUsed, checkIn, checkOut, total: grandTotal });
@@ -151,7 +219,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     const newRoom = roomOf(newRoomId);
     const patch = { room_id: newRoomId };
     if (updateRate && newRoom) {
-      const occupancy = 1 + (booking.co_guests_count || 0);
+      const occupancy = (isPrimaryInGroup(booking, bookings) ? 1 : 0) + (booking.co_guests_count || 0);
       const newRate = computeRoomRate(newRoom, occupancy);
       const newSubtotal = newRate * booking.nights;
       patch.rate = newRate;
@@ -168,7 +236,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   };
   const saveBookingEdit = async (booking, { checkIn, checkOut, source, coGuestsCount, bookingRef, room }) => {
     const nights = nightsBetween(checkIn, checkOut);
-    const occupancy = 1 + (Number(coGuestsCount) || 0);
+    // Secondary rooms in a multi-room group don't get the main guest's "+1"
+    // — mirrors createBooking's occupancy rule (see isPrimaryInGroup).
+    const occupancy = (isPrimaryInGroup(booking, bookings) ? 1 : 0) + (Number(coGuestsCount) || 0);
     const rate = room ? computeRoomRate(room, occupancy) : booking.rate;
     const subtotal = rate * nights;
     const discount = Math.min(booking.discount || 0, subtotal);
@@ -187,17 +257,29 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       booking_ref: bookingRef.trim() || null,
     };
     await updateBooking(booking.id, patch);
-    logActivity("Booking edited", `${guestOf(booking.guest_id)?.name || "Guest"} — Room ${room?.number || roomOf(booking.room_id)?.number || "—"}`);
+    const g = guestOf(booking.guest_id);
+    const r = room || roomOf(booking.room_id);
+    const changes = describeBookingChanges(booking, patch, roomOf);
+    if (changes.length) {
+      logActivity("Booking edited", `(${g ? g.name : "Guest"}, Room ${r ? r.number : "—"}): ${changes.join(", ")}`);
+    }
     setEditModal(null);
     reload();
-    // Auto-generate an updated confirmation PDF reflecting the edited details
-    // — updateBooking() doesn't return the row, so merge the patch locally.
-    const { data: settings } = await getSettings();
-    downloadBookingConfirmation(
-      [{ booking: { ...booking, ...patch }, room: room || roomOf(booking.room_id) }],
-      guestOf(booking.guest_id),
-      settings || {}
-    );
+  };
+
+  // Same discount logic as Billing.jsx's applyDiscount — lets staff apply a
+  // discount right from the Bookings tab instead of switching to Billing.
+  const applyDiscount = async (booking, discount, reason) => {
+    const subtotal = booking.subtotal ?? booking.total;
+    const clamped = Math.max(0, Math.min(subtotal, discount));
+    const total = computeBookingTotal({ ...booking, subtotal, discount: clamped });
+    await updateBooking(booking.id, { discount: clamped, discount_reason: reason, total });
+    if (clamped > 0) {
+      const g = guestOf(booking.guest_id);
+      logActivity("Discount applied", `${currency(clamped)} on booking for ${g ? g.name : "guest"}${reason ? ` — ${reason}` : ""}`);
+    }
+    setDiscountModal(null);
+    reload();
   };
 
   const visible = bookings.filter((b) => {
@@ -211,7 +293,6 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   // dates (see createBooking above) — group them here purely for display:
   // a "N rooms" badge, and clustering the rows next to each other regardless
   // of how the underlying list happens to be sorted.
-  const groupKeyOf = (b) => `${b.guest_id}|${b.check_in}|${b.check_out}`;
   const groupSizes = useMemo(() => {
     const sizes = {};
     bookings.forEach((b) => {
@@ -233,6 +314,20 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     });
     return order.flatMap((k) => byKey.get(k));
   }, [visible]);
+
+  // On-demand confirmation PDF — pulls in every booking in the same group
+  // (same guest + dates) so a multi-room stay gets one combined PDF no
+  // matter which room's card the button was clicked from.
+  const downloadConfirmationFor = async (b) => {
+    const groupBookings = bookings.filter((x) => groupKeyOf(x) === groupKeyOf(b));
+    const ordered = orderGroupPrimaryFirst(groupBookings);
+    const { data: settings } = await getSettings();
+    downloadBookingConfirmation(
+      ordered.map((bk) => ({ booking: bk, room: roomOf(bk.room_id) })),
+      guestOf(b.guest_id),
+      settings || {}
+    );
+  };
 
   return (
     <div>
@@ -293,6 +388,9 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           const g = guestOf(b.guest_id);
           const r = roomOf(b.room_id);
           const groupSize = groupSizes[groupKeyOf(b)] || 1;
+          // Only the primary room in a group includes the main guest —
+          // secondary rooms hold their own co-guests only (see isPrimaryInGroup).
+          const roomOccupancy = (isPrimaryInGroup(b, bookings) ? 1 : 0) + (b.co_guests_count || 0);
           return (
             <div className="card" key={b.id} id={`booking-${b.id}`} style={b.id === highlightId ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : undefined}>
               <div className="card-col">
@@ -323,7 +421,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
               </span>
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, width: 90 }}>{currency(b.total)}</span>
               <span style={{ fontSize: 11.5, color: "var(--ink45)" }}>
-                {1 + (b.co_guests_count || 0)} guest{b.co_guests_count ? "s" : ""}
+                {roomOccupancy} guest{roomOccupancy === 1 ? "" : "s"}
               </span>
               {(b.checked_in_at || b.checked_out_at) && (
                 <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>
@@ -353,6 +451,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
               <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <Button variant="ghost" onClick={() => setDetailModal(b)}>
                   Guest details
+                </Button>
+                <Button variant="ghost" onClick={() => downloadConfirmationFor(b)}>
+                  Download confirmation
+                </Button>
+                <Button variant="ghost" onClick={() => setDiscountModal(b)}>
+                  Discount
                 </Button>
                 {b.status !== "checked-out" && b.status !== "cancelled" && b.status !== "no-show" && (
                   <Button variant="ghost" onClick={() => setEditModal(b)}>
@@ -440,6 +544,13 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           onConfirm={(payload) => changeRoom(payload)}
         />
       )}
+      {discountModal && (
+        <DiscountModal
+          booking={discountModal}
+          onClose={() => setDiscountModal(null)}
+          onSave={(d, r) => applyDiscount(discountModal, d, r)}
+        />
+      )}
     </div>
   );
 }
@@ -520,8 +631,12 @@ function ChangeRoomModal({ booking, guest, currentRoom, allRooms, bookings, main
             <input type="checkbox" checked={updateRate} onChange={(e) => setUpdateRate(e.target.checked)} style={{ marginTop: 2 }} />
             <span>
               Update rate to the new room's tariff (
-              {newRoom ? currency(computeRoomRate(newRoom, 1 + (booking.co_guests_count || 0))) : "—"}/night). Leave unchecked to keep
-              the guest's originally agreed price.
+              {newRoom
+                ? currency(
+                    computeRoomRate(newRoom, (isPrimaryInGroup(booking, bookings) ? 1 : 0) + (booking.co_guests_count || 0))
+                  )
+                : "—"}
+              /night). Leave unchecked to keep the guest's originally agreed price.
             </span>
           </label>
           {activeTicket && (
@@ -628,9 +743,11 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   const canAddRoom = availableForDates.length > roomRows.length;
 
   const nights = nightsBetween(checkIn, checkOut);
-  const rowDetails = roomRows.map((row) => {
+  const rowDetails = roomRows.map((row, idx) => {
     const room = availableForDates.find((r) => r.id === row.roomId);
-    const occupancy = 1 + (Number(row.coGuestsCount) || 0);
+    // Only the first room's occupancy includes the main guest — the others
+    // are occupied by their own co-guests only (mirrors createBooking below).
+    const occupancy = (idx === 0 ? 1 : 0) + (Number(row.coGuestsCount) || 0);
     const rate = room ? computeRoomRate(room, occupancy) : 0;
     const ticket = room ? (maintenanceTickets || []).find((t) => t.room_id === room.id && t.status !== "Resolved") : null;
     return { row, room, occupancy, rate, subtotal: rate * nights, ticket };
@@ -944,7 +1061,10 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
 
   const room = availableForDates.find((r) => r.id === roomId);
   const nights = nightsBetween(checkIn, checkOut);
-  const occupancy = 1 + (Number(coGuestsCount) || 0);
+  // A secondary room in a multi-room group is occupied by its own co-guests
+  // only — the main guest is only ever physically in the primary room.
+  const isPrimaryRoom = isPrimaryInGroup(booking, bookings);
+  const occupancy = (isPrimaryRoom ? 1 : 0) + (Number(coGuestsCount) || 0);
   const newRate = room ? computeRoomRate(room, occupancy) : booking.rate;
   const newSubtotal = newRate * nights;
   const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal });
@@ -1296,10 +1416,19 @@ function GuestDetailModal({ booking, guest, coGuests, onClose }) {
 }
 
 // ---------------------------------------------------------------
-// BOOKING CONFIRMATION PDF — generated the moment a booking is created
+// BOOKING CONFIRMATION PDF — on-demand only, via the "Download confirmation"
+// button in the list (no auto-download on create/edit).
 // ---------------------------------------------------------------
 function pdfMoney(n) {
   return `Rs. ${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
+// The main guest only physically occupies the FIRST room in a group — every
+// other room holds its own co-guests only. `entries` is built in creation
+// order (or ref-suffix order for an already-saved group — see
+// downloadConfirmationFor), so index 0 is always the primary room.
+function entryOccupancy(entry, index) {
+  return (index === 0 ? 1 : 0) + (entry.booking.co_guests_count || 0);
 }
 
 // entries: [{ booking, room }] — one per room. All entries share the same
@@ -1312,6 +1441,7 @@ function downloadBookingConfirmation(entries, guest, settings) {
   const LIGHT = [246, 241, 231];
   const first = entries[0].booking;
   const multi = entries.length > 1;
+  const gstPercent = Number(settings.gst_percent || 0);
 
   doc.setFillColor(...NAVY);
   doc.rect(0, 0, 210, 38, "F");
@@ -1352,17 +1482,20 @@ function downloadBookingConfirmation(entries, guest, settings) {
   const roomsLabel = entries.map(({ room }) => (room ? `${room.number} (${room.type})` : "—")).join(", ");
   doc.text(`Room${multi ? "s" : ""}: ${roomsLabel}`, 110, 55);
   doc.text(`${fmtDate(first.check_in)}  to  ${fmtDate(first.check_out)}  (${first.nights} night${first.nights > 1 ? "s" : ""})`, 110, 61);
-  const totalGuests = entries.reduce((s, { booking }) => s + 1 + (booking.co_guests_count || 0), 0);
+  const totalGuests = entries.reduce((s, e, i) => s + entryOccupancy(e, i), 0);
   doc.text(
     `${totalGuests} guest${totalGuests > 1 ? "s" : ""}${first.source ? `  ·  Source: ${first.source}` : ""}`,
     110,
     67
   );
 
-  const bodyRows = entries.flatMap(({ booking, room }) => {
+  // Each room's own occupancy shows next to its charge line (e.g. "Room 202
+  // (3 guests)") — not just the group total above.
+  const bodyRows = entries.flatMap(({ booking, room }, i) => {
+    const occ = entryOccupancy({ booking }, i);
     const rows = [
       [
-        `Room ${room ? room.number : "—"} charges (${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""})`,
+        `Room ${room ? room.number : "—"} (${occ} guest${occ === 1 ? "" : "s"}) — ${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""}`,
         pdfMoney(booking.subtotal ?? booking.total),
       ],
     ];
@@ -1391,31 +1524,52 @@ function downloadBookingConfirmation(entries, guest, settings) {
 
   const grandTotal = entries.reduce((s, { booking }) => s + (booking.total || 0), 0);
   const totalPaid = entries.reduce((s, { booking }) => s + (booking.paid_amount || 0), 0);
+  const balance = grandTotal - totalPaid;
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(...NAVY);
   doc.text(multi ? "Grand total" : "Total", 120, y);
   doc.text(pdfMoney(grandTotal), 196, y, { align: "right" });
-  y += 8;
+  y += 6;
 
-  const balance = grandTotal - totalPaid;
+  // Room rate is tax-inclusive — the total stays exactly what's charged; GST
+  // is shown as a breakdown pulled out of that total, same as the Tax
+  // Invoice PDF in Billing.jsx.
+  if (gstPercent > 0) {
+    const { base, gst } = splitInclusiveGst(grandTotal, gstPercent);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`(incl. GST ${gstPercent}%: ${pdfMoney(gst)} · taxable value: ${pdfMoney(base)})`, 120, y);
+    y += 7;
+  }
+
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9.5);
   doc.setTextColor(70, 83, 107);
-  doc.text("Payable at checkout", 120, y);
+  doc.text("Amount paid", 120, y);
+  doc.text(pdfMoney(totalPaid), 196, y, { align: "right" });
+  y += 6;
+
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(balance > 0 ? 166 : 95, balance > 0 ? 69 : 136, balance > 0 ? 47 : 99);
+  doc.text(balance > 0 ? "Balance due" : "Fully paid", 120, y);
   doc.text(pdfMoney(Math.max(0, balance)), 196, y, { align: "right" });
   y += 14;
 
   doc.setDrawColor(220, 220, 220);
   doc.line(14, y, 196, y);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(120, 120, 120);
+  doc.text("Check-in: 12:00 PM · Check-out: 11:00 AM", 14, y + 7);
   doc.setFont("helvetica", "italic");
   doc.setFontSize(9);
-  doc.setTextColor(120, 120, 120);
-  doc.text("This confirms your reservation. We look forward to hosting you!", 14, y + 6);
+  doc.text("This confirms your reservation. We look forward to hosting you!", 14, y + 14);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
-  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y + 6, { align: "right" });
+  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y + 14, { align: "right" });
 
   doc.save(`booking_confirmation_${(guest?.name || "guest").replace(/\s+/g, "_")}_${first.check_in}.pdf`);
 }
