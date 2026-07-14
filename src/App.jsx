@@ -4,7 +4,7 @@ import { subscribeToPush, playNotificationBell } from "./components.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Rooms from "./pages/Rooms.jsx";
-import Bookings, { CheckInModal, CheckOutModal } from "./pages/Bookings.jsx";
+import Bookings, { CheckInModal, CheckOutModal, groupOfBooking } from "./pages/Bookings.jsx";
 import Guests from "./pages/Guests.jsx";
 import Billing from "./pages/Billing.jsx";
 import Staff from "./pages/Staff.jsx";
@@ -208,43 +208,66 @@ export default function App() {
 
   // Check-in / check-out are triggered from either the Bookings tab or the
   // Dashboard's "Arriving/Departing today" cards — lifted here so both can
-  // open the same modal.
+  // open the same modal. Both hold the FULL room group (1 or more sibling
+  // bookings sharing guest+dates), resolved from whichever single booking
+  // was actually clicked, so a multi-room stay checks in/out together
+  // instead of needing the same steps repeated per room.
   const [checkInModal, setCheckInModal] = useState(null);
   const [checkOutModal, setCheckOutModal] = useState(null);
   const [autoOpenPaymentFor, setAutoOpenPaymentFor] = useState(null);
 
+  const openCheckIn = (booking) => setCheckInModal(groupOfBooking(booking, data.bookings));
+  const openCheckOut = (booking) => {
+    setAutoOpenPaymentFor(null);
+    setCheckOutModal(groupOfBooking(booking, data.bookings));
+  };
+
   const finishCheckIn = async ({ early, earlyFee }) => {
-    const booking = checkInModal;
-    const newTotal = booking.total + (early ? earlyFee : 0);
-    await updateBooking(booking.id, {
-      status: "checked-in",
-      checked_in_at: new Date().toISOString(),
-      early_checkin: !!early,
-      early_checkin_fee: early ? earlyFee : 0,
-      total: newTotal,
-    });
-    await updateRoom(booking.room_id, { status: "occupied" });
+    const group = checkInModal;
+    const primary = group[0];
+    for (const booking of group) {
+      // The early-check-in fee (if any) is a one-time charge for the whole
+      // group, not per room — attached to the primary booking only, same as
+      // deposit/discount already are.
+      const fee = booking.id === primary.id && early ? Number(earlyFee) || 0 : 0;
+      await updateBooking(booking.id, {
+        status: "checked-in",
+        checked_in_at: new Date().toISOString(),
+        early_checkin: !!early,
+        early_checkin_fee: fee,
+        total: booking.total + fee,
+      });
+      await updateRoom(booking.room_id, { status: "occupied" });
+    }
     setCheckInModal(null);
     reload();
   };
 
   const finishCheckOut = async ({ late, lateFee }) => {
-    const booking = checkOutModal;
-    const newTotal = booking.total + (late ? lateFee : 0);
-    await updateBooking(booking.id, {
-      status: "checked-out",
-      checked_out_at: new Date().toISOString(),
-      late_checkout: !!late,
-      late_checkout_fee: late ? lateFee : 0,
-      total: newTotal,
-    });
-    await updateRoom(booking.room_id, { status: "cleaning" });
-    // Auto-queue a cleaning task — any Housekeeping staff can pick it up (see Staff tab)
-    await addTask({ staff_id: null, room_id: booking.room_id, task: "Clean room after checkout", done: false });
+    const group = checkOutModal;
+    const primary = group[0];
+    let combinedNewTotal = 0;
+    let combinedPaid = 0;
+    for (const booking of group) {
+      const fee = booking.id === primary.id && late ? Number(lateFee) || 0 : 0;
+      const newTotal = booking.total + fee;
+      await updateBooking(booking.id, {
+        status: "checked-out",
+        checked_out_at: new Date().toISOString(),
+        late_checkout: !!late,
+        late_checkout_fee: fee,
+        total: newTotal,
+      });
+      await updateRoom(booking.room_id, { status: "cleaning" });
+      // Auto-queue a cleaning task per room — any Housekeeping staff can pick it up (see Staff tab)
+      await addTask({ staff_id: null, room_id: booking.room_id, task: "Clean room after checkout", done: false });
+      combinedNewTotal += newTotal;
+      combinedPaid += booking.paid_amount;
+    }
     setCheckOutModal(null);
-    // Pending balance? Jump straight to Billing → Record payment for this booking.
-    if (newTotal - booking.paid_amount > 0) {
-      setAutoOpenPaymentFor(booking.id);
+    // Pending balance across the group? Jump straight to Billing.
+    if (combinedNewTotal - combinedPaid > 0) {
+      setAutoOpenPaymentFor(primary.id);
       setTab("billing");
     }
     reload();
@@ -466,8 +489,8 @@ export default function App() {
                 bookings={data.bookings}
                 guests={data.guests}
                 setTab={setTab}
-                onOpenCheckIn={(b) => setCheckInModal(b)}
-                onOpenCheckOut={(b) => { setAutoOpenPaymentFor(null); setCheckOutModal(b); }}
+                onOpenCheckIn={openCheckIn}
+                onOpenCheckOut={openCheckOut}
               />
             )}
             {tab === "calendar" && <CalendarPage bookings={data.bookings} guests={data.guests} rooms={data.rooms} />}
@@ -480,8 +503,8 @@ export default function App() {
                 coGuests={data.coGuests}
                 maintenanceTickets={data.maintenanceTickets}
                 highlightId={highlightId}
-                onOpenCheckIn={(b) => setCheckInModal(b)}
-                onOpenCheckOut={(b) => { setAutoOpenPaymentFor(null); setCheckOutModal(b); }}
+                onOpenCheckIn={openCheckIn}
+                onOpenCheckOut={openCheckOut}
                 reload={reload}
               />
             )}
@@ -538,15 +561,18 @@ export default function App() {
       </div>
       {checkInModal && (
         <CheckInModal
-          booking={checkInModal}
-          guest={data.guests.find((g) => g.id === checkInModal.guest_id)}
-          existingCoGuests={data.coGuests.filter((c) => c.booking_id === checkInModal.id)}
+          bookings={checkInModal}
+          guest={data.guests.find((g) => g.id === checkInModal[0].guest_id)}
+          rooms={data.rooms}
+          coGuestsByBooking={Object.fromEntries(
+            checkInModal.map((b) => [b.id, data.coGuests.filter((c) => c.booking_id === b.id)])
+          )}
           onClose={() => setCheckInModal(null)}
           onConfirm={finishCheckIn}
         />
       )}
       {checkOutModal && (
-        <CheckOutModal booking={checkOutModal} onClose={() => setCheckOutModal(null)} onConfirm={finishCheckOut} />
+        <CheckOutModal bookings={checkOutModal} onClose={() => setCheckOutModal(null)} onConfirm={finishCheckOut} />
       )}
     </div>
   );

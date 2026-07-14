@@ -65,19 +65,12 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
     reload();
   };
 
-  // The deposit is already folded into paid_amount the moment the booking is
-  // created (see createBooking in Bookings.jsx) — there's no separate "adjust
-  // to bill" step needed anymore. The only deposit action left is refunding
-  // it back to the guest in cash, which has to reverse that same amount back
-  // out of paid_amount to keep the books accurate.
-  const refundDepositToGuest = async (booking) => {
-    if (!confirm(`Mark ${currency(booking.deposit)} deposit as refunded to guest?`)) return;
-    const newPaid = Math.max(0, (booking.paid_amount || 0) - booking.deposit);
-    await updateBooking(booking.id, { paid_amount: newPaid, deposit_status: "refunded", deposit_refunded: true });
-    const g = guests.find((x) => x.id === booking.guest_id);
-    logActivity("Deposit refunded", `${currency(booking.deposit)} to ${g ? g.name : "guest"}`);
-    reload();
-  };
+  // Deposits are recorded as a normal payment the moment a booking is created
+  // (see createBooking in Bookings.jsx) — they're already in paid_amount and
+  // in the payment list below, exactly like any other payment. There's no
+  // separate "adjust to bill" or "refund deposit" flow anymore: if a deposit
+  // genuinely needs reversing, delete or edit that payment entry (below,
+  // Owner-only) the same way any other payment correction works.
 
   const sorted = bookings
     .slice()
@@ -140,7 +133,6 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
           const g = guests.find((x) => x.id === b.guest_id);
           const r = rooms.find((x) => x.id === b.room_id);
           const balance = b.total - b.paid_amount;
-          const depositStatus = b.deposit_status || (b.deposit_refunded ? "refunded" : "adjusted");
           const items = inventoryUsage.filter((u) => u.booking_id === b.id);
           return (
             <div className="card" key={b.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
@@ -162,17 +154,12 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                 </div>
                 <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(b.paid_amount)}</span>
                 {b.deposit > 0 && (
-                  <span style={{ fontSize: 11.5, color: depositStatus === "refunded" ? "var(--ink45)" : "var(--brass)" }}>
-                    Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({depositStatus}, already in Paid)
+                  <span style={{ fontSize: 11.5, color: "var(--brass)" }}>
+                    Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} (already in Paid, see payment list below)
                   </span>
                 )}
                 <Pill color={balance <= 0 ? "#5f8863" : "#a6452f"}>{balance <= 0 ? "Settled" : `Due ${currency(balance)}`}</Pill>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {b.deposit > 0 && depositStatus !== "refunded" && (
-                    <Button variant="ghost" onClick={() => refundDepositToGuest(b)}>
-                      Refund deposit
-                    </Button>
-                  )}
                   {g?.phone && (
                     <a
                       className="btn btn-ghost"
@@ -506,8 +493,7 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(...BRASS);
-    const status = booking.deposit_status || (booking.deposit_refunded ? "refunded" : "adjusted");
-    doc.text(`Advance/deposit collected: ${pdfMoney(booking.deposit)} via ${booking.deposit_mode || "Cash"} (${status}, included in Amount paid below)`, 14, y);
+    doc.text(`Advance/deposit collected: ${pdfMoney(booking.deposit)} via ${booking.deposit_mode || "Cash"} (included in Amount paid below)`, 14, y);
     y += 10;
   }
 

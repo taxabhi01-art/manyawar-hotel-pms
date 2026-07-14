@@ -33,6 +33,7 @@ import {
   updateGuest,
   addCoGuest,
   updateCoGuest,
+  addPayment,
   uploadIdProof,
   getIdProofSignedUrl,
   logActivity,
@@ -41,46 +42,99 @@ import {
 
 // Multi-room bookings are stored as separate rows sharing the same guest +
 // dates (see createBooking below), with no explicit "which room is primary"
-// flag in the DB. createBooking encodes it structurally in the booking_ref
-// instead: the first room's ref is left exactly as typed, and every other
-// room's ref is that SAME string with "-2", "-3", … appended. To find the
-// primary among a set of siblings, look for the one ref that no sibling's
-// ref is derived from — comparing pairs, not pattern-matching a single ref
-// in isolation, which would misfire on any user-typed ref that happens to
-// end in digits (e.g. "BUG-001" looks like it has a "-001" suffix on its
-// own, but isn't one unless a "BUG-001-N" sibling actually exists).
-function groupKeyOf(b) {
-  return `${b.guest_id}|${b.check_in}|${b.check_out}`;
-}
-function isDerivedRef(candidate, base) {
-  if (!candidate || !base) return false;
+// flag or "group id" in the DB. createBooking encodes the relationship
+// structurally in the booking_ref instead: the first room's ref is left
+// exactly as typed, and every other room's ref is that SAME string with
+// "-2", "-3", … appended.
+//
+// Grouping by guest+dates ALONE is not enough — an unrelated older booking
+// for the same guest that happens to share the same check_in/check_out
+// (different, unrelated ref) must NOT be folded into the group, or the
+// room count shown in the UI comes out wrong. So grouping is two-level:
+// first cluster by (guest, check_in, check_out), then within each cluster
+// split further by ref-derivation — a booking only joins another's group if
+// its ref is exactly "<other's ref>-N", comparing actual sibling pairs
+// rather than pattern-matching a single ref in isolation (which would
+// misfire on a user-typed ref that merely ends in digits, e.g. "BUG-001").
+function refIsDerivedFrom(candidate, base) {
+  if (!candidate || !base || candidate === base) return false;
   return candidate.startsWith(base + "-") && /^\d+$/.test(candidate.slice(base.length + 1));
 }
-function findPrimaryBooking(siblings) {
-  if (siblings.length <= 1) return siblings[0] || null;
-  return (
-    siblings.find((b) => !siblings.some((other) => other.id !== b.id && isDerivedRef(b.booking_ref, other.booking_ref))) ||
-    siblings[0]
+
+// Map of booking.id -> group key, computed once over the full booking list.
+function computeGroupKeyMap(allBookings) {
+  const byDateGuest = new Map();
+  allBookings.forEach((b) => {
+    const k = `${b.guest_id}|${b.check_in}|${b.check_out}`;
+    if (!byDateGuest.has(k)) byDateGuest.set(k, []);
+    byDateGuest.get(k).push(b);
+  });
+  const keyMap = new Map();
+  byDateGuest.forEach((cluster, dateGuestKey) => {
+    cluster.forEach((b) => {
+      const parent = cluster.find((other) => other.id !== b.id && refIsDerivedFrom(b.booking_ref, other.booking_ref));
+      const rootRef = parent ? parent.booking_ref : b.booking_ref ?? b.id;
+      keyMap.set(b.id, `${dateGuestKey}|${rootRef}`);
+    });
+  });
+  return keyMap;
+}
+
+// Every ACTIVE sibling of `booking` (including itself), ordered primary-
+// first then by increasing ref suffix — what the confirmation PDF, combined
+// check-in/out, and the "N guests" totals all assume. Cancelled/no-show
+// siblings are deliberately excluded: a cancelled room shouldn't be swept
+// into a combined check-in, and if the structural primary itself was
+// cancelled, whichever active room is left becomes the new primary (gets
+// the main guest's occupancy "+1") rather than leaving the group orphaned.
+// Recomputes the group map each call; callers iterating many bookings
+// should memoize computeGroupKeyMap once and do their own filtering instead
+// (see the Bookings component below).
+export function groupOfBooking(booking, allBookings) {
+  const keyMap = computeGroupKeyMap(allBookings);
+  const key = keyMap.get(booking.id);
+  const siblings = allBookings.filter(
+    (b) => keyMap.get(b.id) === key && (b.id === booking.id || (b.status !== "cancelled" && b.status !== "no-show"))
   );
+  return orderGroupPrimaryFirst(siblings);
 }
-function isPrimaryInGroup(booking, allBookings) {
-  const siblings = allBookings.filter((b) => groupKeyOf(b) === groupKeyOf(booking));
-  const primary = findPrimaryBooking(siblings);
-  return !primary || primary.id === booking.id;
-}
-// Orders a group's bookings primary-first, then by increasing ref suffix —
-// what the confirmation PDF and the "N guests" totals both assume.
 function orderGroupPrimaryFirst(siblings) {
-  const primary = findPrimaryBooking(siblings);
-  if (!primary) return siblings.slice();
+  if (siblings.length <= 1) return siblings.slice();
+  const primary =
+    siblings.find((b) => !siblings.some((other) => other.id !== b.id && refIsDerivedFrom(b.booking_ref, other.booking_ref))) ||
+    siblings[0];
   const rank = (b) => {
     if (b.id === primary.id) return 0;
-    if (isDerivedRef(b.booking_ref, primary.booking_ref)) {
+    if (refIsDerivedFrom(b.booking_ref, primary.booking_ref)) {
       return Number(b.booking_ref.slice(primary.booking_ref.length + 1));
     }
     return Number.MAX_SAFE_INTEGER;
   };
   return siblings.slice().sort((a, c) => rank(a) - rank(c));
+}
+function isPrimaryInGroup(booking, allBookings) {
+  const group = groupOfBooking(booking, allBookings);
+  return group[0]?.id === booking.id;
+}
+// Smallest "-N" suffix not already used by any existing ref in the group —
+// for assigning a ref to a room added to the group during an edit (1 is
+// implicitly taken by the base ref itself).
+function nextAvailableSuffix(existingRefs, baseRef) {
+  const used = new Set();
+  existingRefs.forEach((ref) => {
+    if (!ref) return;
+    if (ref === baseRef) {
+      used.add(1);
+      return;
+    }
+    if (ref.startsWith(baseRef + "-")) {
+      const n = Number(ref.slice(baseRef.length + 1));
+      if (Number.isFinite(n)) used.add(n);
+    }
+  });
+  let n = 2;
+  while (used.has(n)) n++;
+  return n;
 }
 
 // Diffs an edit-booking patch against the booking's previous values so the
@@ -190,16 +244,16 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         discount: clampedDiscount,
         discount_reason: clampedDiscount > 0 ? discountReason || null : null,
         total,
-        // The deposit is folded straight into paid_amount — it's money
-        // already collected, so the balance shown everywhere (Billing,
-        // check-in/out, the confirmation PDF) is correct from the start
-        // instead of needing a separate "adjust to bill" step later.
+        // The deposit is recorded as a real payment (see addPayment below)
+        // and folded into paid_amount the same way any other payment is —
+        // the balance shown everywhere (Billing, check-in/out, the
+        // confirmation PDF) is correct from the start, and it can later be
+        // corrected or reversed with the same edit/delete-payment tools
+        // Billing already has, instead of a separate "refund deposit" flow.
         paid_amount: roomDeposit,
         source: source || "Walk-in",
         deposit: roomDeposit,
         deposit_mode: roomDeposit > 0 ? depositMode || "Cash" : null,
-        deposit_status: roomDeposit > 0 ? "adjusted" : null,
-        deposit_refunded: false,
         co_guests_count: coGuestsCount || 0,
         booking_ref: ref,
         created_at: bookedOn ? new Date(bookedOn + "T12:00:00").toISOString() : undefined,
@@ -207,6 +261,14 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       if (newBooking) {
         newBookings.push(newBooking);
         roomsUsed.push(room);
+        if (roomDeposit > 0) {
+          await addPayment({
+            booking_id: newBooking.id,
+            amount: roomDeposit,
+            mode: depositMode || "Cash",
+            paid_on: bookedOn || todayISO(),
+          });
+        }
       }
     }
     setBusy(false);
@@ -220,14 +282,22 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     }
   };
 
-  const cancelBooking = async (b, reason) => {
-    await updateBooking(b.id, { status: "cancelled", cancel_reason: reason || null });
-    if (b.status === "checked-in") {
-      await updateRoom(b.room_id, { status: "available" });
+  // Cancels every room in the group together — a multi-room stay is one
+  // reservation from the guest's point of view, so cancelling one room but
+  // not the rest would leave a confusing half-cancelled group behind.
+  const cancelBookingGroup = async (members, reason) => {
+    const g = guestOf(members[0].guest_id);
+    const roomNumbers = members.map((m) => roomOf(m.room_id)?.number || "—").join(", ");
+    for (const b of members) {
+      await updateBooking(b.id, { status: "cancelled", cancel_reason: reason || null });
+      if (b.status === "checked-in") {
+        await updateRoom(b.room_id, { status: "available" });
+      }
     }
-    const g = guestOf(b.guest_id);
-    const r = roomOf(b.room_id);
-    logActivity("Booking cancelled", `${g ? g.name : "Guest"} — Room ${r ? r.number : "—"}${reason ? ` (${reason})` : ""}`);
+    logActivity(
+      "Booking cancelled",
+      `${g ? g.name : "Guest"} — Room${members.length > 1 ? "s" : ""} ${roomNumbers}${reason ? ` (${reason})` : ""}`
+    );
     reload();
   };
 
@@ -254,79 +324,153 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     setChangeRoomModal(null);
     reload();
   };
-  const saveBookingEdit = async (booking, { checkIn, checkOut, source, coGuestsCount, bookingRef, room, discount, discountReason }) => {
+  // Edit now operates on the WHOLE group at once (mirrors New Booking's
+  // room-rows UI): existing rows get updated in place, a removed row cancels
+  // that single room, and a newly-added row inserts a fresh booking sharing
+  // the group's guest/dates — matching how createBooking builds a group in
+  // the first place.
+  const saveBookingEditGroup = async (groupBookings, { checkIn, checkOut, source, bookingRef, discount, discountReason, depositNow, depositMode, rows }) => {
+    const primary = groupBookings[0];
     const nights = nightsBetween(checkIn, checkOut);
-    // Secondary rooms in a multi-room group don't get the main guest's "+1"
-    // — mirrors createBooking's occupancy rule (see isPrimaryInGroup).
-    const occupancy = (isPrimaryInGroup(booking, bookings) ? 1 : 0) + (Number(coGuestsCount) || 0);
-    const rate = room ? computeRoomRate(room, occupancy) : booking.rate;
-    const subtotal = rate * nights;
-    const clampedDiscount = Math.max(0, Math.min(subtotal, Number(discount) || 0));
-    const total = computeBookingTotal({ ...booking, subtotal, discount: clampedDiscount });
-    const patch = {
-      room_id: room ? room.id : booking.room_id,
-      check_in: checkIn,
-      check_out: checkOut,
-      nights,
-      rate,
-      subtotal,
-      discount: clampedDiscount,
-      discount_reason: clampedDiscount > 0 ? discountReason || null : null,
-      total,
-      source,
-      co_guests_count: Number(coGuestsCount) || 0,
-      booking_ref: bookingRef.trim() || null,
-    };
-    await updateBooking(booking.id, patch);
-    const g = guestOf(booking.guest_id);
-    const r = room || roomOf(booking.room_id);
-    const changes = describeBookingChanges(booking, patch, roomOf);
-    if (changes.length) {
-      logActivity("Booking edited", `(${g ? g.name : "Guest"}, Room ${r ? r.number : "—"}): ${changes.join(", ")}`);
+    const activeRows = rows.filter((r) => !r.removed);
+    const removedRows = rows.filter((r) => r.removed && r.bookingId);
+    const logLines = [];
+
+    for (const r of removedRows) {
+      const original = groupBookings.find((b) => b.id === r.bookingId);
+      await updateBooking(original.id, { status: "cancelled", cancel_reason: "Room removed during edit" });
+      if (original.status === "checked-in") await updateRoom(original.room_id, { status: "available" });
+      logLines.push(`Room ${roomOf(original.room_id)?.number || "—"} removed`);
+    }
+
+    const usedRefs = groupBookings.map((b) => b.booking_ref);
+    for (let i = 0; i < activeRows.length; i++) {
+      const row = activeRows[i];
+      const room = roomOf(row.roomId);
+      // Only the first row keeps the main guest's "+1" — mirrors createBooking.
+      const occupancy = (i === 0 ? 1 : 0) + (Number(row.coGuestsCount) || 0);
+      const rate = computeRoomRate(room, occupancy);
+      const subtotal = rate * nights;
+      const rowDiscount = i === 0 ? Math.max(0, Math.min(subtotal, Number(discount) || 0)) : 0;
+      const total = computeBookingTotal({ subtotal, discount: rowDiscount });
+
+      if (row.bookingId) {
+        const original = groupBookings.find((b) => b.id === row.bookingId);
+        const patch = {
+          room_id: room.id,
+          check_in: checkIn,
+          check_out: checkOut,
+          nights,
+          rate,
+          subtotal,
+          discount: rowDiscount,
+          discount_reason: rowDiscount > 0 ? discountReason || null : null,
+          total,
+          source,
+          co_guests_count: Number(row.coGuestsCount) || 0,
+        };
+        // Renaming the shared ref only makes sense from the primary row, and
+        // only when a rename was actually offered (single-room groups only —
+        // see EditBookingModal's refEditable).
+        if (i === 0 && bookingRef.trim() && bookingRef.trim() !== original.booking_ref) {
+          patch.booking_ref = bookingRef.trim();
+        }
+        await updateBooking(original.id, patch);
+        const changes = describeBookingChanges(original, patch, roomOf);
+        if (changes.length) logLines.push(`Room ${room.number}: ${changes.join(", ")}`);
+      } else {
+        const base = primary.booking_ref || bookingRef.trim();
+        const ref = base ? `${base}-${nextAvailableSuffix(usedRefs, base)}` : null;
+        usedRefs.push(ref);
+        const { data: newBooking } = await addBooking({
+          guest_id: primary.guest_id,
+          room_id: room.id,
+          check_in: checkIn,
+          check_out: checkOut,
+          status: "reserved",
+          rate,
+          nights,
+          subtotal,
+          discount: 0,
+          discount_reason: null,
+          total,
+          paid_amount: 0,
+          source: source || "Walk-in",
+          deposit: 0,
+          deposit_mode: null,
+          co_guests_count: Number(row.coGuestsCount) || 0,
+          booking_ref: ref,
+        });
+        if (newBooking) logLines.push(`Room ${room.number} added`);
+      }
+    }
+
+    if (Number(depositNow) > 0) {
+      await addPayment({ booking_id: primary.id, amount: Number(depositNow), mode: depositMode || "Cash", paid_on: todayISO() });
+      await updateBooking(primary.id, { paid_amount: (primary.paid_amount || 0) + Number(depositNow) });
+      logLines.push(`Payment recorded: ${currency(Number(depositNow))} via ${depositMode || "Cash"}`);
+    }
+
+    const g = guestOf(primary.guest_id);
+    if (logLines.length) {
+      logActivity("Booking edited", `(${g ? g.name : "Guest"}): ${logLines.join(" · ")}`);
     }
     setEditModal(null);
     reload();
   };
 
-  const visible = bookings.filter((b) => {
-    if (filter !== "all" && b.status !== filter) return false;
-    if (dateFrom && b.check_in < dateFrom) return false;
-    if (dateTo && b.check_in > dateTo) return false;
-    return true;
-  });
-
   // Multi-room bookings are stored as separate rows sharing the same guest +
-  // dates (see createBooking above) — group them here purely for display:
-  // a "N rooms" badge, and clustering the rows next to each other regardless
-  // of how the underlying list happens to be sorted.
-  const groupSizes = useMemo(() => {
-    const sizes = {};
-    bookings.forEach((b) => {
-      const k = groupKeyOf(b);
-      sizes[k] = (sizes[k] || 0) + 1;
-    });
-    return sizes;
-  }, [bookings]);
-  const groupedVisible = useMemo(() => {
+  // dates + ref-derivation (see computeGroupKeyMap above) — grouped here so
+  // the list can show ONE combined card per group instead of one per room.
+  const groupKeyMap = useMemo(() => computeGroupKeyMap(bookings), [bookings]);
+  const groupList = useMemo(() => {
     const byKey = new Map();
     const order = [];
-    visible.forEach((b) => {
-      const k = groupKeyOf(b);
+    bookings.forEach((b) => {
+      const k = groupKeyMap.get(b.id);
       if (!byKey.has(k)) {
         byKey.set(k, []);
         order.push(k);
       }
       byKey.get(k).push(b);
     });
-    return order.flatMap((k) => byKey.get(k));
-  }, [visible]);
+    return order.map((k) => orderGroupPrimaryFirst(byKey.get(k)));
+  }, [bookings, groupKeyMap]);
+  // A cancelled/no-show room shouldn't inflate its group's combined total/
+  // balance/room count, and needs to still be reachable under the Cancelled/
+  // No-Show filter tabs — so split each structural group into its active
+  // members (one combined card) and any inactive members (each its own
+  // standalone card, same as before this feature existed).
+  const displayGroups = useMemo(() => {
+    const units = [];
+    groupList.forEach((members) => {
+      const active = members.filter((m) => m.status !== "cancelled" && m.status !== "no-show");
+      const inactive = members.filter((m) => m.status === "cancelled" || m.status === "no-show");
+      if (active.length > 0) units.push(active);
+      inactive.forEach((m) => units.push([m]));
+    });
+    return units;
+  }, [groupList]);
+  const groupFor = (b) => displayGroups.find((members) => members.some((m) => m.id === b.id)) || [b];
+  // Filtering applies to the group as a whole (via its primary booking) —
+  // a group is one visual/behavioral unit, so it's all-in or all-out.
+  const visibleGroups = useMemo(
+    () =>
+      displayGroups.filter((members) => {
+        const primary = members[0];
+        if (filter !== "all" && primary.status !== filter) return false;
+        if (dateFrom && primary.check_in < dateFrom) return false;
+        if (dateTo && primary.check_in > dateTo) return false;
+        return true;
+      }),
+    [displayGroups, filter, dateFrom, dateTo]
+  );
 
   // On-demand confirmation PDF — pulls in every booking in the same group
-  // (same guest + dates) so a multi-room stay gets one combined PDF no
-  // matter which room's card the button was clicked from.
+  // so a multi-room stay gets one combined PDF no matter which room's card
+  // the button was clicked from.
   const downloadConfirmationFor = async (b) => {
-    const groupBookings = bookings.filter((x) => groupKeyOf(x) === groupKeyOf(b));
-    const ordered = orderGroupPrimaryFirst(groupBookings);
+    const ordered = groupFor(b);
     const { data: settings } = await getSettings();
     downloadBookingConfirmation(
       ordered.map((bk) => ({ booking: bk, room: roomOf(bk.room_id) })),
@@ -387,107 +531,141 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         )}
       </div>
 
-      {groupedVisible.length === 0 ? (
+      {visibleGroups.length === 0 ? (
         <EmptyState text="No bookings match this view." />
       ) : (
-        groupedVisible.map((b) => {
-          const g = guestOf(b.guest_id);
-          const r = roomOf(b.room_id);
-          const groupSize = groupSizes[groupKeyOf(b)] || 1;
-          // Only the primary room in a group includes the main guest —
-          // secondary rooms hold their own co-guests only (see isPrimaryInGroup).
-          const roomOccupancy = (isPrimaryInGroup(b, bookings) ? 1 : 0) + (b.co_guests_count || 0);
+        visibleGroups.map((members) => {
+          const primary = members[0];
+          const g = guestOf(primary.guest_id);
+          const isMulti = members.length > 1;
+          const combinedTotal = members.reduce((s, m) => s + (m.total || 0), 0);
+          const combinedPaid = members.reduce((s, m) => s + (m.paid_amount || 0), 0);
+          const combinedBalance = combinedTotal - combinedPaid;
+          const combinedDiscount = members.reduce((s, m) => s + (m.discount || 0), 0);
+          const combinedItemsTotal = members.reduce((s, m) => s + (m.items_total || 0), 0);
+          const totalGuests = members.reduce((s, m, i) => s + (i === 0 ? 1 : 0) + (m.co_guests_count || 0), 0);
+          const isHighlighted = members.some((m) => m.id === highlightId);
           return (
-            <div className="card" key={b.id} id={`booking-${b.id}`} style={b.id === highlightId ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : undefined}>
-              <div className="card-col">
-                <div className="title">
-                  {g ? g.name : "Guest removed"} {g?.vip && "⭐"}
-                  {groupSize > 1 && (
-                    <span
-                      style={{
-                        marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: "#fff",
-                        background: "var(--ink)", borderRadius: 999, padding: "2px 8px",
-                      }}
-                    >
-                      {groupSize} rooms
-                    </span>
+            <div
+              className="card"
+              key={primary.id}
+              id={`booking-${primary.id}`}
+              style={{ flexDirection: "column", alignItems: "stretch", ...(isHighlighted ? { outline: "2px solid var(--brass)", background: "#fff8ea" } : {}) }}
+            >
+              {/* Hidden anchors so global search can scroll/highlight this
+                  group card no matter which sibling booking id it targets. */}
+              {members.slice(1).map((m) => (
+                <span key={m.id} id={`booking-${m.id}`} />
+              ))}
+              <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                <div className="card-col">
+                  <div className="title">
+                    {g ? g.name : "Guest removed"} {g?.vip && "⭐"}
+                    {isMulti && (
+                      <span
+                        style={{
+                          marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: "#fff",
+                          background: "var(--ink)", borderRadius: 999, padding: "2px 8px",
+                        }}
+                      >
+                        {members.length} rooms
+                      </span>
+                    )}
+                  </div>
+                  <div className="sub">{g ? g.phone : ""}</div>
+                  {primary.booking_ref && (
+                    <div style={{ fontSize: 10.5, color: "var(--brass)", fontFamily: "var(--font-mono)" }}>Ref: {primary.booking_ref}</div>
+                  )}
+                  {primary.created_at && (
+                    <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>Booked on {fmtDate(primary.created_at.slice(0, 10))}</div>
                   )}
                 </div>
-                <div className="sub">{g ? g.phone : ""}</div>
-                {b.booking_ref && (
-                  <div style={{ fontSize: 10.5, color: "var(--brass)", fontFamily: "var(--font-mono)" }}>Ref: {b.booking_ref}</div>
-                )}
-                {b.created_at && (
-                  <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>Booked on {fmtDate(b.created_at.slice(0, 10))}</div>
-                )}
-              </div>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, width: 60 }}>{r ? r.number : "—"}</span>
-              <span style={{ fontSize: 13, color: "var(--ink70)", width: 190 }}>
-                {fmtDate(b.check_in)} → {fmtDate(b.check_out)}
-              </span>
-              <div style={{ width: 90 }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{currency(b.total)}</div>
-                {b.discount > 0 && (
-                  <div style={{ fontSize: 10.5, color: "var(--brass)" }}>
-                    {currency(b.subtotal ?? b.total)} − {currency(b.discount)} off
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 170 }}>
+                  {members.map((m, i) => {
+                    const r = roomOf(m.room_id);
+                    const occ = (i === 0 ? 1 : 0) + (m.co_guests_count || 0);
+                    return (
+                      <div key={m.id} style={{ fontSize: 12.5, color: "var(--ink70)" }}>
+                        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{r ? r.number : "—"}</span>{" "}
+                        ({occ} guest{occ === 1 ? "" : "s"})
+                        {m.discount > 0 && <span style={{ color: "var(--brass)" }}> · −{currency(m.discount)}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <span style={{ fontSize: 13, color: "var(--ink70)", width: 190 }}>
+                  {fmtDate(primary.check_in)} → {fmtDate(primary.check_out)}
+                </span>
+                <div style={{ width: 100 }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{currency(combinedTotal)}</div>
+                  {combinedDiscount > 0 && (
+                    <div style={{ fontSize: 10.5, color: "var(--brass)" }}>−{currency(combinedDiscount)} off</div>
+                  )}
+                </div>
+                <span style={{ fontSize: 11.5, color: "var(--ink45)" }}>
+                  {totalGuests} guest{totalGuests === 1 ? "" : "s"}
+                </span>
+                {(primary.checked_in_at || primary.checked_out_at) && (
+                  <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>
+                    {primary.checked_in_at && <>In: {fmtDateTime(primary.checked_in_at)} </>}
+                    {primary.checked_out_at && <>· Out: {fmtDateTime(primary.checked_out_at)}</>}
                   </div>
                 )}
-              </div>
-              <span style={{ fontSize: 11.5, color: "var(--ink45)" }}>
-                {roomOccupancy} guest{roomOccupancy === 1 ? "" : "s"}
-              </span>
-              {(b.checked_in_at || b.checked_out_at) && (
-                <div style={{ fontSize: 10.5, color: "var(--ink45)" }}>
-                  {b.checked_in_at && <>In: {fmtDateTime(b.checked_in_at)} </>}
-                  {b.checked_out_at && <>· Out: {fmtDateTime(b.checked_out_at)}</>}
+                {combinedItemsTotal > 0 && (
+                  <span style={{ fontSize: 11.5, color: "var(--brass)" }}>+{currency(combinedItemsTotal)} items</span>
+                )}
+                {primary.early_checkin && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--brass)", borderRadius: 999, padding: "2px 9px" }}>
+                    ⚡ Early check-in {primary.early_checkin_fee > 0 ? `(+${currency(primary.early_checkin_fee)})` : ""}
+                  </span>
+                )}
+                {primary.late_checkout && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--rust)", borderRadius: 999, padding: "2px 9px" }}>
+                    ⏰ Late checkout {primary.late_checkout_fee > 0 ? `(+${currency(primary.late_checkout_fee)})` : ""}
+                  </span>
+                )}
+                <Pill color={BOOKING_STATUS_COLORS[primary.status] || "#46536b"}>{primary.status}</Pill>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <Button variant="ghost" onClick={() => setDetailModal(members)}>
+                    Guest details
+                  </Button>
+                  <Button variant="ghost" onClick={() => downloadConfirmationFor(primary)}>
+                    Download confirmation
+                  </Button>
+                  {primary.status !== "checked-out" && primary.status !== "cancelled" && primary.status !== "no-show" && (
+                    <Button variant="ghost" onClick={() => setEditModal(members)}>
+                      Edit booking
+                    </Button>
+                  )}
+                  {primary.status === "reserved" && <Button onClick={() => onOpenCheckIn(primary)}>Check in</Button>}
+                  {!isMulti && primary.status === "checked-in" && (
+                    <Button variant="ghost" onClick={() => setChangeRoomModal(primary)}>
+                      Change room
+                    </Button>
+                  )}
+                  {primary.status === "checked-in" && (
+                    <Button variant="dark" onClick={() => onOpenCheckOut(primary)}>
+                      Check out
+                    </Button>
+                  )}
+                  {(primary.status === "reserved" || primary.status === "checked-in") && (
+                    <Button variant="danger" onClick={() => setCancelModal(members)}>
+                      Cancel booking
+                    </Button>
+                  )}
                 </div>
-              )}
-              {b.deposit > 0 && (
-                <span style={{ fontSize: 11.5, color: b.deposit_status === "refunded" ? "var(--ink45)" : "var(--brass)" }}>
-                  Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} ({b.deposit_status || "adjusted"}, already in Paid)
+              </div>
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5 }}>
+                <span>
+                  Paid: <strong>{currency(combinedPaid)}</strong>
                 </span>
-              )}
-              {b.items_total > 0 && (
-                <span style={{ fontSize: 11.5, color: "var(--brass)" }}>+{currency(b.items_total)} items</span>
-              )}
-              {b.early_checkin && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--brass)", borderRadius: 999, padding: "2px 9px" }}>
-                  ⚡ Early check-in {b.early_checkin_fee > 0 ? `(+${currency(b.early_checkin_fee)})` : ""}
+                <span style={{ color: combinedBalance > 0 ? "var(--rust)" : "var(--sage)" }}>
+                  Balance: <strong>{currency(Math.max(0, combinedBalance))}</strong>
                 </span>
-              )}
-              {b.late_checkout && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--rust)", borderRadius: 999, padding: "2px 9px" }}>
-                  ⏰ Late checkout {b.late_checkout_fee > 0 ? `(+${currency(b.late_checkout_fee)})` : ""}
-                </span>
-              )}
-              <Pill color={BOOKING_STATUS_COLORS[b.status] || "#46536b"}>{b.status}</Pill>
-              <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <Button variant="ghost" onClick={() => setDetailModal(b)}>
-                  Guest details
-                </Button>
-                <Button variant="ghost" onClick={() => downloadConfirmationFor(b)}>
-                  Download confirmation
-                </Button>
-                {b.status !== "checked-out" && b.status !== "cancelled" && b.status !== "no-show" && (
-                  <Button variant="ghost" onClick={() => setEditModal(b)}>
-                    Edit booking
-                  </Button>
-                )}
-                {b.status === "reserved" && <Button onClick={() => onOpenCheckIn(b)}>Check in</Button>}
-                {b.status === "checked-in" && (
-                  <Button variant="ghost" onClick={() => setChangeRoomModal(b)}>
-                    Change room
-                  </Button>
-                )}
-                {b.status === "checked-in" && (
-                  <Button variant="dark" onClick={() => onOpenCheckOut(b)}>
-                    Check out
-                  </Button>
-                )}
-                {(b.status === "reserved" || b.status === "checked-in") && (
-                  <Button variant="danger" onClick={() => setCancelModal(b)}>
-                    Cancel booking
-                  </Button>
+                {members.some((m) => m.deposit > 0) && (
+                  <span style={{ color: "var(--brass)" }}>
+                    Advance collected: {currency(members.reduce((s, m) => s + (m.deposit || 0), 0))}
+                  </span>
                 )}
               </div>
             </div>
@@ -508,22 +686,20 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       )}
       {editModal && (
         <EditBookingModal
-          booking={editModal}
-          bookings={bookings}
-          rooms={
-            bookableRooms.some((r) => r.id === editModal.room_id)
-              ? bookableRooms
-              : [...bookableRooms, roomOf(editModal.room_id)].filter(Boolean)
-          }
+          groupBookings={editModal}
+          allBookings={bookings}
+          rooms={rooms}
+          maintenanceTickets={maintenanceTickets}
           onClose={() => setEditModal(null)}
-          onSave={(d) => saveBookingEdit(editModal, d)}
+          onSave={(d) => saveBookingEditGroup(editModal, d)}
         />
       )}
       {detailModal && (
         <GuestDetailModal
-          booking={detailModal}
-          guest={guestOf(detailModal.guest_id)}
-          coGuests={coGuests.filter((c) => c.booking_id === detailModal.id)}
+          bookings={detailModal}
+          rooms={rooms}
+          guest={guestOf(detailModal[0].guest_id)}
+          coGuests={coGuests.filter((c) => detailModal.some((m) => m.id === c.booking_id))}
           onClose={() => setDetailModal(null)}
         />
       )}
@@ -532,12 +708,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       )}
       {cancelModal && (
         <CancelBookingModal
-          booking={cancelModal}
-          guest={guestOf(cancelModal.guest_id)}
-          room={roomOf(cancelModal.room_id)}
+          bookings={cancelModal}
+          guest={guestOf(cancelModal[0].guest_id)}
+          rooms={rooms}
           onClose={() => setCancelModal(null)}
           onConfirm={(reason) => {
-            cancelBooking(cancelModal, reason);
+            cancelBookingGroup(cancelModal, reason);
             setCancelModal(null);
           }}
         />
@@ -558,21 +734,25 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   );
 }
 
-function CancelBookingModal({ booking, guest, room, onClose, onConfirm }) {
+function CancelBookingModal({ bookings, guest, rooms, onClose, onConfirm }) {
   const [reason, setReason] = useState("");
+  const primary = bookings[0];
+  const combinedTotal = bookings.reduce((s, b) => s + (b.total || 0), 0);
   return (
-    <Modal title="Cancel booking" onClose={onClose} width={420}>
+    <Modal title={bookings.length > 1 ? "Cancel booking (all rooms)" : "Cancel booking"} onClose={onClose} width={420}>
       <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rust)" }}>
-          {guest ? guest.name : "Guest"} — Room {room ? room.number : "—"}
+          {guest ? guest.name : "Guest"} — Room{bookings.length > 1 ? "s" : ""}{" "}
+          {bookings.map((b) => rooms.find((r) => r.id === b.room_id)?.number || "—").join(", ")}
         </div>
         <div style={{ fontSize: 12, color: "var(--ink70)", marginTop: 2 }}>
-          {fmtDate(booking.check_in)} → {fmtDate(booking.check_out)} · {currency(booking.total)}
+          {fmtDate(primary.check_in)} → {fmtDate(primary.check_out)} · {currency(combinedTotal)}
         </div>
       </div>
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
-        This keeps the booking on record (marked "Cancelled") instead of deleting it — useful for
-        history and reporting.
+        {bookings.length > 1
+          ? "This cancels ALL rooms in this group (marked \"Cancelled\") instead of deleting them — useful for history and reporting."
+          : "This keeps the booking on record (marked \"Cancelled\") instead of deleting it — useful for history and reporting."}
       </p>
       <Field label="Reason (optional)">
         <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Guest changed plans" />
@@ -1059,44 +1239,133 @@ function BookingModal({ allRooms, bookings, guests, maintenanceTickets, onClose,
   );
 }
 
-function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
-  const [checkIn, setCheckIn] = useState(booking.check_in);
-  const [checkOut, setCheckOut] = useState(booking.check_out);
-  const [source, setSource] = useState(booking.source || BOOKING_SOURCES[0]);
-  const [coGuestsCount, setCoGuestsCount] = useState(booking.co_guests_count || 0);
-  const [discount, setDiscount] = useState(booking.discount || 0);
-  const [discountReason, setDiscountReason] = useState(booking.discount_reason || "");
-  const [bookingRef, setBookingRef] = useState(booking.booking_ref || "");
+// groupBookings: every room currently in this guest's group (primary first,
+// 1 or more) — Edit now works the same way New Booking does: one form for
+// the whole group, with the same room-rows UI (add/remove rooms) instead of
+// being limited to the single room that happened to be clicked.
+function EditBookingModal({ groupBookings, allBookings, rooms, maintenanceTickets, onClose, onSave }) {
+  const primary = groupBookings[0];
+  const [checkIn, setCheckIn] = useState(primary.check_in);
+  const [checkOut, setCheckOut] = useState(primary.check_out);
+  const [source, setSource] = useState(primary.source || BOOKING_SOURCES[0]);
+  const [bookingRef, setBookingRef] = useState(primary.booking_ref || "");
+  const [discount, setDiscount] = useState(primary.discount || 0);
+  const [discountReason, setDiscountReason] = useState(primary.discount_reason || "");
+  const [depositNow, setDepositNow] = useState(0);
+  const [depositMode, setDepositMode] = useState(PAYMENT_MODES[0]);
 
-  // Only rooms with no overlapping booking for the CHOSEN dates show up here —
-  // same pattern as the new-booking form. The booking's own record is excluded
-  // from the overlap check so its current room stays selectable.
-  const availableForDates = useMemo(
-    () => rooms.filter((r) => isRoomAvailableForDates(r.id, checkIn, checkOut, bookings, booking.id, r.status)),
-    [rooms, bookings, checkIn, checkOut, booking.id]
+  // Maintenance rooms are normally excluded, but a room the group already
+  // holds stays selectable even if it's since been flagged for maintenance.
+  const bookableRooms = useMemo(
+    () => rooms.filter((r) => r.status !== "maintenance" || groupBookings.some((m) => m.room_id === r.id)),
+    [rooms, groupBookings]
   );
-  const [roomId, setRoomId] = useState(booking.room_id);
+  // Overlap-check against every OTHER booking — excluding this group's own
+  // rows, so the rooms it already holds don't count as "taken" by itself.
+  const bookingsExcludingGroup = useMemo(
+    () => allBookings.filter((b) => !groupBookings.some((m) => m.id === b.id)),
+    [allBookings, groupBookings]
+  );
+  const availableForDates = useMemo(
+    () => bookableRooms.filter((r) => isRoomAvailableForDates(r.id, checkIn, checkOut, bookingsExcludingGroup, undefined, r.status)),
+    [bookableRooms, bookingsExcludingGroup, checkIn, checkOut]
+  );
+
+  // One row per existing booking in the group (primary first, unchanged
+  // order), plus any rows added/removed during this edit.
+  const [roomRows, setRoomRows] = useState(() =>
+    groupBookings.map((b) => ({ key: b.id, bookingId: b.id, roomId: b.room_id, coGuestsCount: b.co_guests_count || 0, removed: false }))
+  );
+  const nextRowKeyRef = useRef(1);
+
   useEffect(() => {
-    if (!availableForDates.find((r) => r.id === roomId)) {
-      setRoomId(availableForDates[0]?.id || "");
-    }
+    // Dates changed — drop any active row whose room is no longer available
+    // for the new dates (or collided with another row) and backfill.
+    setRoomRows((prev) => {
+      const used = new Set();
+      return prev.map((row) => {
+        if (row.removed) return row;
+        let roomId = row.roomId;
+        if (!availableForDates.find((r) => r.id === roomId) || used.has(roomId)) {
+          roomId = availableForDates.find((r) => !used.has(r.id))?.id || "";
+        }
+        used.add(roomId);
+        return { ...row, roomId };
+      });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkIn, checkOut]);
 
-  const room = availableForDates.find((r) => r.id === roomId);
+  const updateRoomRow = (key, patch) => setRoomRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const addRoomRow = () => {
+    const usedIds = new Set(roomRows.filter((r) => !r.removed).map((r) => r.roomId).filter(Boolean));
+    const nextRoom = availableForDates.find((r) => !usedIds.has(r.id));
+    setRoomRows((prev) => [...prev, { key: `new-${nextRowKeyRef.current}`, bookingId: null, roomId: nextRoom?.id || "", coGuestsCount: 0, removed: false }]);
+    nextRowKeyRef.current += 1;
+  };
+  // A never-saved new row is dropped outright; an existing booking is
+  // flagged for cancellation on save (and can be undone before then).
+  const removeRoomRow = (key) =>
+    setRoomRows((prev) => prev.map((r) => (r.key === key ? { ...r, removed: true } : r)).filter((r) => r.bookingId || !r.removed));
+  const restoreRoomRow = (key) => updateRoomRow(key, { removed: false });
+
+  const activeRows = roomRows.filter((r) => !r.removed);
+  const canAddRoom = availableForDates.length > activeRows.length;
   const nights = nightsBetween(checkIn, checkOut);
-  // A secondary room in a multi-room group is occupied by its own co-guests
-  // only — the main guest is only ever physically in the primary room.
-  const isPrimaryRoom = isPrimaryInGroup(booking, bookings);
-  const occupancy = (isPrimaryRoom ? 1 : 0) + (Number(coGuestsCount) || 0);
-  const newRate = room ? computeRoomRate(room, occupancy) : booking.rate;
-  const newSubtotal = newRate * nights;
-  const clampedDiscount = Math.max(0, Math.min(newSubtotal, Number(discount) || 0));
-  const newTotal = computeBookingTotal({ ...booking, subtotal: newSubtotal, discount: clampedDiscount });
-  const available = !!roomId && isRoomAvailableForDates(roomId, checkIn, checkOut, bookings, booking.id);
+  const rowDetails = activeRows.map((row, idx) => {
+    const room = rooms.find((r) => r.id === row.roomId);
+    const occupancy = (idx === 0 ? 1 : 0) + (Number(row.coGuestsCount) || 0);
+    const rate = room ? computeRoomRate(room, occupancy) : 0;
+    const ticket = room ? (maintenanceTickets || []).find((t) => t.room_id === room.id && t.status !== "Resolved") : null;
+    return { row, room, occupancy, rate, subtotal: rate * nights, ticket };
+  });
+  const grandSubtotal = rowDetails.reduce((s, d) => s + d.subtotal, 0);
+  const clampedDiscount = rowDetails.length ? Math.max(0, Math.min(rowDetails[0].subtotal, Number(discount) || 0)) : 0;
+  const grandTotal = grandSubtotal - clampedDiscount;
+  // Renaming the shared reference is only offered when the group is (and
+  // stays) a single room — a multi-room ref rename would need to cascade
+  // "-2"/"-3" suffixes across siblings, which isn't worth the complexity.
+  const refEditable = groupBookings.length === 1 && activeRows.length === 1;
+  const allRowsHaveRoom = activeRows.every((row) => row.roomId);
+
+  const submit = () => {
+    if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
+    if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
+    if (activeRows.length === 0) return alert("At least one room must remain — use \"Cancel booking\" from the list instead if you want to remove the whole booking.");
+    if (!allRowsHaveRoom) return alert("Select a room for every row (or remove the row) — no room is available for one of them.");
+
+    const ticketsHit = rowDetails.filter((d) => d.ticket);
+    if (ticketsHit.length) {
+      const lines = ticketsHit
+        .map((d) => `Room ${d.room?.number || ""}: "${d.ticket.issue}" (Priority: ${d.ticket.priority}, Status: ${d.ticket.status})`)
+        .join("\n");
+      const proceed = confirm(
+        `⚠ ${ticketsHit.length > 1 ? "These rooms have" : "This room has"} an open maintenance issue:\n\n${lines}\n\nSave anyway?`
+      );
+      if (!proceed) return;
+    }
+    if (checkIn < todayISO()) {
+      const proceed = confirm(
+        `⚠ Check-in date (${checkIn}) is in the past.\n\nThis is allowed, but double-check it's correct.\n\nContinue?`
+      );
+      if (!proceed) return;
+    }
+
+    onSave({
+      checkIn,
+      checkOut,
+      source,
+      bookingRef: bookingRef.trim(),
+      discount: Number(discount) || 0,
+      discountReason: discountReason.trim(),
+      depositNow: Number(depositNow) || 0,
+      depositMode,
+      rows: roomRows.map((r) => ({ ...r, coGuestsCount: Number(r.coGuestsCount) || 0 })),
+    });
+  };
 
   return (
-    <Modal title="Edit booking" onClose={onClose} width={440}>
+    <Modal title="Edit booking" onClose={onClose} width={560}>
       <div className="grid-2">
         <Field label="Check-in">
           <input className="input" type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
@@ -1104,30 +1373,106 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
         <Field label="Check-out">
           <input className="input" type="date" min={checkIn} value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
         </Field>
-        <Field label={`Room (${availableForDates.length} available for these dates)`}>
-          {availableForDates.length === 0 ? (
-            <p style={{ fontSize: 12.5, color: "var(--rust)", margin: "4px 0 0" }}>
-              No rooms free for this range.
-            </p>
-          ) : (
-            <select className="input" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-              {availableForDates.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.number} · {r.type}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-        <Field label="Co-guests">
-          <input
-            className="input"
-            type="number"
-            min={0}
-            value={coGuestsCount}
-            onChange={(e) => setCoGuestsCount(Math.max(0, Number(e.target.value)))}
-          />
-        </Field>
+      </div>
+      {checkIn < todayISO() && (
+        <p style={{ fontSize: 12, color: "var(--brass)", marginTop: 6 }}>
+          ⚠ This check-in date is in the past — allowed, but double-check it's what you meant.
+        </p>
+      )}
+
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink70)", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 8 }}>
+          Room{activeRows.length > 1 ? "s" : ""} ({availableForDates.length} available for these dates)
+        </div>
+        {roomRows.map((row) => {
+          if (row.removed) {
+            const removedRoom = rooms.find((r) => r.id === row.roomId);
+            return (
+              <div
+                key={row.key}
+                style={{ marginBottom: 10, background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              >
+                <span style={{ fontSize: 12.5, color: "var(--rust)" }}>
+                  Room {removedRoom ? removedRoom.number : "—"} will be removed from this booking on save
+                </span>
+                <Button variant="ghost" onClick={() => restoreRoomRow(row.key)}>
+                  Undo
+                </Button>
+              </div>
+            );
+          }
+          const idx = activeRows.findIndex((r) => r.key === row.key);
+          const detail = rowDetails[idx];
+          const usedByOthers = new Set(activeRows.filter((r) => r.key !== row.key).map((r) => r.roomId).filter(Boolean));
+          const options = availableForDates.filter((r) => r.id === row.roomId || !usedByOthers.has(r.id));
+          const canRemove = row.bookingId !== primary.id; // the primary room anchors the group and can't be removed here
+          return (
+            <div key={row.key} style={{ marginBottom: 10, background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 10 }}>
+              <div className="grid-2">
+                <Field label={activeRows.length > 1 ? `Room ${idx + 1}${!row.bookingId ? " (new)" : ""}` : "Room"}>
+                  <select className="input" value={row.roomId} onChange={(e) => updateRoomRow(row.key, { roomId: e.target.value })}>
+                    {options.length === 0 && <option value="">No room available</option>}
+                    {options.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.number} · {r.type}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                  <div style={{ flex: 1 }}>
+                    <Field label="Co-guests">
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        value={row.coGuestsCount}
+                        onChange={(e) => updateRoomRow(row.key, { coGuestsCount: Math.max(0, Number(e.target.value)) })}
+                      />
+                    </Field>
+                  </div>
+                  {canRemove && (
+                    <button
+                      type="button"
+                      onClick={() => removeRoomRow(row.key)}
+                      title="Remove this room"
+                      style={{
+                        marginBottom: 1, padding: "9px 11px", border: "1px solid rgba(166,69,47,0.35)",
+                        borderRadius: 8, background: "transparent", color: "var(--rust)", cursor: "pointer",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+              {detail?.room && (
+                <div style={{ marginTop: 8, fontSize: 12.5, color: "var(--ink70)" }}>
+                  {detail.occupancy} guest{detail.occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(detail.rate)}</strong> · {nights} night{nights > 1 ? "s" : ""} ·
+                  Total: <strong>{currency(detail.subtotal)}</strong>
+                </div>
+              )}
+              {detail?.ticket && (
+                <div style={{ marginTop: 8, background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}>
+                  ⚠ <strong>Room {detail.room?.number} has an open maintenance issue:</strong> "{detail.ticket.issue}" (Priority: {detail.ticket.priority}, Status: {detail.ticket.status})
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {canAddRoom && (
+          <Button variant="ghost" onClick={addRoomRow}>
+            + Add another room
+          </Button>
+        )}
+        {activeRows.length > 1 && (
+          <div style={{ marginTop: 4, fontSize: 13, textAlign: "right" }}>
+            Grand total ({activeRows.length} rooms): <strong>{currency(grandTotal)}</strong>
+          </div>
+        )}
+      </div>
+
+      <div className="grid-2" style={{ marginTop: 14 }}>
         <Field label="Booking source">
           <select className="input" value={source} onChange={(e) => setSource(e.target.value)}>
             {BOOKING_SOURCES.map((s) => (
@@ -1135,14 +1480,24 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
             ))}
           </select>
         </Field>
-      </div>
-      <div style={{ marginTop: 14 }}>
-        <Field label="Booking ID / reference">
-          <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} />
+        <Field label="Record additional payment now (optional)">
+          <input className="input" type="number" value={depositNow} onChange={(e) => setDepositNow(e.target.value)} />
         </Field>
       </div>
+      {Number(depositNow) > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <Field label="Payment mode">
+            <select className="input" value={depositMode} onChange={(e) => setDepositMode(e.target.value)}>
+              {PAYMENT_MODES.map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      )}
+
       <div className="grid-2" style={{ marginTop: 14 }}>
-        <Field label="Discount">
+        <Field label={activeRows.length > 1 ? "Discount (applied to first room only)" : "Discount"}>
           <input className="input" type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
         </Field>
         {Number(discount) > 0 && (
@@ -1151,38 +1506,29 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
           </Field>
         )}
       </div>
+
+      <div style={{ marginTop: 14 }}>
+        <Field label={refEditable ? "Booking ID / reference" : "Booking ID / reference (shared across rooms — not editable here)"}>
+          <input className="input" value={bookingRef} onChange={(e) => setBookingRef(e.target.value)} disabled={!refEditable} />
+        </Field>
+      </div>
+
       <p style={{ fontSize: 13, marginTop: 14 }}>
-        {nights} nights · {occupancy} guest{occupancy > 1 ? "s" : ""} · Rate/night: <strong>{currency(newRate)}</strong>
+        {nights} night{nights > 1 ? "s" : ""}
         {clampedDiscount > 0 && (
           <>
             {" "}
             · Discount: <strong>{currency(clampedDiscount)}</strong>
           </>
         )}{" "}
-        · New total: <strong>{currency(newTotal)}</strong>
+        · New total: <strong>{currency(grandTotal)}</strong>
       </p>
-      {checkIn < todayISO() && (
-        <p style={{ fontSize: 12, color: "var(--brass)" }}>
-          ⚠ This check-in date is in the past — allowed, but double-check it's what you meant.
-        </p>
-      )}
-      {!available && (
-        <p style={{ fontSize: 12.5, color: "var(--rust)" }}>
-          ⚠ This room already has another booking that overlaps these new dates.
-        </p>
-      )}
+
       <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button
-          disabled={!available}
-          onClick={() => {
-            if (checkOut < checkIn) return alert("Check-out can't be before check-in.");
-            if (!bookingRef.trim()) return alert("Booking ID / reference is required.");
-            onSave({ checkIn, checkOut, source, coGuestsCount, bookingRef, room, discount, discountReason: discountReason.trim() });
-          }}
-        >
+        <Button disabled={!allRowsHaveRoom} onClick={submit}>
           Save
         </Button>
       </div>
@@ -1195,27 +1541,40 @@ function EditBookingModal({ booking, bookings, rooms, onClose, onSave }) {
 // co-guests, flag+charge an early check-in fee if applicable, then
 // finalize check-in. Exported so it can be triggered from Dashboard too.
 // ---------------------------------------------------------------
-export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConfirm }) {
+// bookings: every room in the group being checked in together (primary
+// first, 1 or more). The main guest's ID is captured ONCE — they're one
+// physical person regardless of how many rooms they've booked — while
+// co-guests are captured per room, since each room's co-guests differ.
+export function CheckInModal({ bookings, guest, rooms, coGuestsByBooking, onClose, onConfirm }) {
   const [guestFront, setGuestFront] = useState(null);
   const [guestBack, setGuestBack] = useState(null);
   const [guestFrontUrl, setGuestFrontUrl] = useState(null);
   const [guestBackUrl, setGuestBackUrl] = useState(null);
-  const slots = Math.max(booking.co_guests_count || 0, existingCoGuests.length);
-  const [coForms, setCoForms] = useState(
-    Array.from({ length: slots }, (_, i) => ({
-      id: existingCoGuests[i]?.id || null,
-      name: existingCoGuests[i]?.name || "",
-      frontFile: null,
-      backFile: null,
-      frontUrl: null,
-      backUrl: null,
-      existingFrontPath: existingCoGuests[i]?.id_proof_front_path || null,
-      existingBackPath: existingCoGuests[i]?.id_proof_back_path || null,
-    }))
+  const [roomForms, setRoomForms] = useState(() =>
+    bookings.map((b) => {
+      const existing = coGuestsByBooking[b.id] || [];
+      const slots = Math.max(b.co_guests_count || 0, existing.length);
+      return {
+        bookingId: b.id,
+        coForms: Array.from({ length: slots }, (_, i) => ({
+          id: existing[i]?.id || null,
+          name: existing[i]?.name || "",
+          frontFile: null,
+          backFile: null,
+          frontUrl: null,
+          backUrl: null,
+          existingFrontPath: existing[i]?.id_proof_front_path || null,
+          existingBackPath: existing[i]?.id_proof_back_path || null,
+        })),
+      };
+    })
   );
   const [saving, setSaving] = useState(false);
-  const early = isEarlyCheckin(booking);
+  // All rooms in a group share identical check-in/out dates, so "early" is
+  // the same call for every one of them — determine it once from the first.
+  const early = isEarlyCheckin(bookings[0]);
   const [earlyFee, setEarlyFee] = useState(0);
+  const balance = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
 
   useEffect(() => {
     if (guest?.id_proof_front_path) {
@@ -1224,22 +1583,28 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
     if (guest?.id_proof_back_path) {
       getIdProofSignedUrl(guest.id_proof_back_path).then(({ data }) => data && setGuestBackUrl(data.signedUrl));
     }
-    coForms.forEach((f, i) => {
-      if (f.existingFrontPath) {
-        getIdProofSignedUrl(f.existingFrontPath).then(({ data }) => {
-          if (data) setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, frontUrl: data.signedUrl } : p)));
-        });
-      }
-      if (f.existingBackPath) {
-        getIdProofSignedUrl(f.existingBackPath).then(({ data }) => {
-          if (data) setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, backUrl: data.signedUrl } : p)));
-        });
-      }
+    roomForms.forEach((rf, ri) => {
+      rf.coForms.forEach((f, fi) => {
+        if (f.existingFrontPath) {
+          getIdProofSignedUrl(f.existingFrontPath).then(({ data }) => {
+            if (data) updateCoForm(ri, fi, { frontUrl: data.signedUrl });
+          });
+        }
+        if (f.existingBackPath) {
+          getIdProofSignedUrl(f.existingBackPath).then(({ data }) => {
+            if (data) updateCoForm(ri, fi, { backUrl: data.signedUrl });
+          });
+        }
+      });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const balance = booking.total - booking.paid_amount;
+  const updateCoForm = (roomIdx, coIdx, patch) => {
+    setRoomForms((prev) =>
+      prev.map((rf, ri) => (ri !== roomIdx ? rf : { ...rf, coForms: rf.coForms.map((f, i) => (i !== coIdx ? f : { ...f, ...patch })) }))
+    );
+  };
 
   const confirm_ = async () => {
     setSaving(true);
@@ -1258,22 +1623,24 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
         }
         if (Object.keys(patch).length) await updateGuest(guest.id, patch);
       }
-      for (const f of coForms) {
-        if (!f.name.trim() && !f.frontFile && !f.backFile) continue;
-        let frontPath = f.existingFrontPath;
-        let backPath = f.existingBackPath;
-        if (f.frontFile) {
-          frontPath = `co-guest-${booking.id}-front-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
-          await uploadIdProof(frontPath, f.frontFile);
-        }
-        if (f.backFile) {
-          backPath = `co-guest-${booking.id}-back-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
-          await uploadIdProof(backPath, f.backFile);
-        }
-        if (f.id) {
-          await updateCoGuest(f.id, { name: f.name.trim(), id_proof_front_path: frontPath, id_proof_back_path: backPath });
-        } else if (f.name.trim() || frontPath || backPath) {
-          await addCoGuest({ booking_id: booking.id, name: f.name.trim(), id_proof_front_path: frontPath, id_proof_back_path: backPath });
+      for (const rf of roomForms) {
+        for (const f of rf.coForms) {
+          if (!f.name.trim() && !f.frontFile && !f.backFile) continue;
+          let frontPath = f.existingFrontPath;
+          let backPath = f.existingBackPath;
+          if (f.frontFile) {
+            frontPath = `co-guest-${rf.bookingId}-front-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+            await uploadIdProof(frontPath, f.frontFile);
+          }
+          if (f.backFile) {
+            backPath = `co-guest-${rf.bookingId}-back-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+            await uploadIdProof(backPath, f.backFile);
+          }
+          if (f.id) {
+            await updateCoGuest(f.id, { name: f.name.trim(), id_proof_front_path: frontPath, id_proof_back_path: backPath });
+          } else if (f.name.trim() || frontPath || backPath) {
+            await addCoGuest({ booking_id: rf.bookingId, name: f.name.trim(), id_proof_front_path: frontPath, id_proof_back_path: backPath });
+          }
         }
       }
     } finally {
@@ -1290,7 +1657,7 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
   };
 
   return (
-    <Modal title="Check-in — verify ID" onClose={onClose} width={520}>
+    <Modal title={bookings.length > 1 ? `Check-in — ${bookings.length} rooms` : "Check-in — verify ID"} onClose={onClose} width={560}>
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
         Take a clear photo of the front and back of each guest's ID proof. Photos are stored securely and linked to this guest's record for future stays.
       </p>
@@ -1314,38 +1681,50 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
         </div>
       </div>
 
-      {coForms.map((f, i) => (
-        <div key={i} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
-          <Field label={`Co-guest ${i + 1} name`}>
-            <input
-              className="input"
-              value={f.name}
-              onChange={(e) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, name: e.target.value } : p)))}
-            />
-          </Field>
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-            <IdCaptureField
-              label="ID proof — front"
-              file={f.frontFile}
-              existingUrl={f.frontUrl}
-              onFile={(file) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, frontFile: file } : p)))}
-            />
-            <IdCaptureField
-              label="ID proof — back"
-              file={f.backFile}
-              existingUrl={f.backUrl}
-              onFile={(file) => setCoForms((prev) => prev.map((p, idx) => (idx === i ? { ...p, backFile: file } : p)))}
-            />
+      {roomForms.map((rf, ri) => {
+        const b = bookings[ri];
+        const r = rooms.find((x) => x.id === b.room_id);
+        return (
+          <div key={b.id}>
+            {bookings.length > 1 && (
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink70)", textTransform: "uppercase", margin: "12px 0 6px" }}>
+                Room {r ? r.number : "—"}
+              </div>
+            )}
+            {rf.coForms.length === 0 && bookings.length > 1 && (
+              <p style={{ fontSize: 12, color: "var(--ink45)", margin: "0 0 8px" }}>No co-guests for this room.</p>
+            )}
+            {rf.coForms.map((f, fi) => (
+              <div key={fi} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                <Field label={`Co-guest ${fi + 1} name`}>
+                  <input className="input" value={f.name} onChange={(e) => updateCoForm(ri, fi, { name: e.target.value })} />
+                </Field>
+                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <IdCaptureField
+                    label="ID proof — front"
+                    file={f.frontFile}
+                    existingUrl={f.frontUrl}
+                    onFile={(file) => updateCoForm(ri, fi, { frontFile: file })}
+                  />
+                  <IdCaptureField
+                    label="ID proof — back"
+                    file={f.backFile}
+                    existingUrl={f.backUrl}
+                    onFile={(file) => updateCoForm(ri, fi, { backFile: file })}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 8 }}>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button disabled={saving} onClick={confirm_}>
-          {saving ? "Saving…" : "Confirm check-in"}
+          {saving ? "Saving…" : bookings.length > 1 ? `Confirm check-in (${bookings.length} rooms)` : "Confirm check-in"}
         </Button>
       </div>
     </Modal>
@@ -1356,13 +1735,14 @@ export function CheckInModal({ booking, guest, existingCoGuests, onClose, onConf
 // CHECK-OUT — balance warning + late checkout fee if applicable.
 // Exported so it can be triggered from Dashboard too.
 // ---------------------------------------------------------------
-export function CheckOutModal({ booking, onClose, onConfirm }) {
-  const balance = booking.total - booking.paid_amount;
-  const late = isLateCheckout(booking);
+// bookings: every room in the group being checked out together (1 or more).
+export function CheckOutModal({ bookings, onClose, onConfirm }) {
+  const balance = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
+  const late = isLateCheckout(bookings[0]);
   const [lateFee, setLateFee] = useState(0);
 
   return (
-    <Modal title="Check-out" onClose={onClose} width={400}>
+    <Modal title={bookings.length > 1 ? `Check-out — ${bookings.length} rooms` : "Check-out"} onClose={onClose} width={400}>
       {balance > 0 && (
         <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--rust)" }}>⚠ Balance due: {currency(balance)}</div>
@@ -1384,7 +1764,7 @@ export function CheckOutModal({ booking, onClose, onConfirm }) {
           Cancel
         </Button>
         <Button variant="dark" onClick={() => onConfirm({ late, lateFee: Number(lateFee) || 0 })}>
-          Confirm check-out
+          {bookings.length > 1 ? `Confirm check-out (${bookings.length} rooms)` : "Confirm check-out"}
         </Button>
       </div>
     </Modal>
@@ -1395,10 +1775,13 @@ export function CheckOutModal({ booking, onClose, onConfirm }) {
 // GUEST DETAIL — view everything on file for a booking: main guest,
 // co-guests, and their scanned ID photos.
 // ---------------------------------------------------------------
-function GuestDetailModal({ booking, guest, coGuests, onClose }) {
+// bookings: every room in the guest's group (1 or more) — the main guest's
+// ID is shown once, co-guests are shown per room they're actually staying in.
+function GuestDetailModal({ bookings, rooms, guest, coGuests, onClose }) {
   const [guestFrontUrl, setGuestFrontUrl] = useState(null);
   const [guestBackUrl, setGuestBackUrl] = useState(null);
   const [coUrls, setCoUrls] = useState({});
+  const totalCoGuestsExpected = bookings.reduce((s, b) => s + (b.co_guests_count || 0), 0);
 
   useEffect(() => {
     if (guest?.id_proof_front_path) {
@@ -1434,19 +1817,33 @@ function GuestDetailModal({ booking, guest, coGuests, onClose }) {
       </div>
       {coGuests.length === 0 ? (
         <p style={{ fontSize: 12.5, color: "var(--ink45)" }}>
-          {booking.co_guests_count > 0 ? "Co-guest details haven't been captured yet — do this at check-in." : "No co-guests on this booking."}
+          {totalCoGuestsExpected > 0 ? "Co-guest details haven't been captured yet — do this at check-in." : "No co-guests on this booking."}
         </p>
       ) : (
-        coGuests.map((c) => (
-          <div key={c.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 8 }}>
-            <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 6 }}>{c.name || "Co-guest"}</div>
-            <div style={{ display: "flex", gap: 10 }}>
-              {coUrls[c.id + "_front"] && <img src={coUrls[c.id + "_front"]} alt="ID front" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
-              {coUrls[c.id + "_back"] && <img src={coUrls[c.id + "_back"]} alt="ID back" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
+        bookings.map((b) => {
+          const roomCoGuests = coGuests.filter((c) => c.booking_id === b.id);
+          if (roomCoGuests.length === 0) return null;
+          const r = rooms.find((x) => x.id === b.room_id);
+          return (
+            <div key={b.id}>
+              {bookings.length > 1 && (
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink70)", textTransform: "uppercase", margin: "10px 0 6px" }}>
+                  Room {r ? r.number : "—"}
+                </div>
+              )}
+              {roomCoGuests.map((c) => (
+                <div key={c.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 14, marginBottom: 8 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 6 }}>{c.name || "Co-guest"}</div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {coUrls[c.id + "_front"] && <img src={coUrls[c.id + "_front"]} alt="ID front" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
+                    {coUrls[c.id + "_back"] && <img src={coUrls[c.id + "_back"]} alt="ID back" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />}
+                  </div>
+                  {!coUrls[c.id + "_front"] && !coUrls[c.id + "_back"] && <div style={{ fontSize: 11.5, color: "var(--rust)" }}>No ID proof on file yet</div>}
+                </div>
+              ))}
             </div>
-            {!coUrls[c.id + "_front"] && !coUrls[c.id + "_back"] && <div style={{ fontSize: 11.5, color: "var(--rust)" }}>No ID proof on file yet</div>}
-          </div>
-        ))
+          );
+        })
       )}
       <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
         <Button variant="ghost" onClick={onClose}>
