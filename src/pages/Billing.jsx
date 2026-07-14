@@ -384,7 +384,11 @@ function pdfMoney(n) {
   return `Rs. ${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
+// `settings` also carries the "Print on Bill" toggles (pdf_show_*, all
+// default ON — see Settings.jsx) that decide which optional sections below
+// actually render.
 function downloadTaxInvoice(booking, guest, room, settings, items) {
+  const show = (key) => settings[key] !== false;
   const doc = new jsPDF();
   const gstPercent = Number(settings.gst_percent || 0);
   // Room rate is tax-inclusive — the grand total is exactly booking.total
@@ -420,8 +424,15 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(220, 220, 225);
-  doc.text(`Date: ${fmtDate(todayISO())}`, 196, 24, { align: "right" });
-  doc.text(`Booking ref: ${booking.booking_ref || booking.id.slice(0, 8).toUpperCase()}`, 196, 30, { align: "right" });
+  // Booking ID / Reference ID / Bill No. are three distinct identifiers —
+  // Booking ID is the system's own short id, Reference ID is the
+  // guest/OTA-facing ref, Bill No. is the sequential accounting number (see
+  // Settings → Bill Numbering).
+  const headerLines = [`Date: ${fmtDate(todayISO())}`];
+  if (show("pdf_show_reference_id") && booking.booking_ref) headerLines.push(`Ref: ${booking.booking_ref}`);
+  if (show("pdf_show_booking_id")) headerLines.push(`Booking ID: ${booking.id.slice(0, 8).toUpperCase()}`);
+  if (show("pdf_show_bill_no") && booking.bill_no) headerLines.push(`Bill No: ${booking.bill_no}`);
+  headerLines.forEach((line, i) => doc.text(line, 196, 24 + i * 6, { align: "right" }));
 
   doc.setFillColor(...LIGHT);
   doc.roundedRect(14, 46, 182, 26, 2, 2, "F");
@@ -435,7 +446,13 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   doc.text(guest?.phone || "", 20, 61);
   doc.text(`Room ${room ? room.number : "—"} · ${room ? room.type : ""}`, 110, 55);
   doc.text(`${fmtDate(booking.check_in)}  to  ${fmtDate(booking.check_out)}  (${booking.nights} nights)`, 110, 61);
-  if (booking.source) doc.text(`Source: ${booking.source}`, 20, 67);
+  const guestSourceParts = [];
+  if (show("pdf_show_occupancy")) {
+    const occ = 1 + (booking.co_guests_count || 0);
+    guestSourceParts.push(`${occ} guest${occ === 1 ? "" : "s"}`);
+  }
+  if (booking.source) guestSourceParts.push(`Source: ${booking.source}`);
+  if (guestSourceParts.length) doc.text(guestSourceParts.join("  ·  "), 20, 67);
 
   autoTable(doc, {
     startY: 80,
@@ -468,7 +485,7 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   doc.text(pdfMoney(grandTotal), 196, y, { align: "right" });
   y += 6;
 
-  if (gstPercent > 0) {
+  if (gstPercent > 0 && show("pdf_show_gst")) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(120, 120, 120);
@@ -489,7 +506,7 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   doc.text(pdfMoney(Math.max(0, balance)), 196, y, { align: "right" });
   y += 12;
 
-  if (booking.deposit > 0) {
+  if (show("pdf_show_deposit") && booking.deposit > 0) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(...BRASS);
@@ -498,7 +515,7 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   }
 
   // Payment trail — every payment with its date and mode, not just the total
-  if ((booking.payments || []).length > 0) {
+  if (show("pdf_show_payment_trail") && (booking.payments || []).length > 0) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9.5);
     doc.setTextColor(...NAVY);
@@ -516,19 +533,27 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
     y = doc.lastAutoTable.finalY + 8;
   }
 
-  if (y > 260) {
+  if (y > 255) {
     doc.addPage();
     y = 20;
   }
   doc.setDrawColor(220, 220, 220);
   doc.line(14, y + 6, 196, y + 6);
+  y += 12;
+  if (show("pdf_show_checkin_checkout_time")) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(120, 120, 120);
+    doc.text("Check-in: 12:00 PM · Check-out: 11:00 AM", 14, y);
+    y += 7;
+  }
   doc.setFont("helvetica", "italic");
   doc.setFontSize(9);
   doc.setTextColor(120, 120, 120);
-  doc.text("Thank you for staying with us. We hope to welcome you again soon!", 14, y + 12);
+  doc.text("Thank you for staying with us. We hope to welcome you again soon!", 14, y);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
-  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y + 12, { align: "right" });
+  doc.text(`Generated on ${fmtDate(todayISO())}`, 196, y, { align: "right" });
 
   doc.save(`invoice_${(guest?.name || "guest").replace(/\s+/g, "_")}_${booking.check_in}.pdf`);
 }
