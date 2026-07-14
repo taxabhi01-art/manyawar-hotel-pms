@@ -402,8 +402,22 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   const BRASS = [184, 134, 63];
   const LIGHT = [246, 241, 231];
 
+  // Booking ID / Reference ID / Bill No. are three distinct identifiers —
+  // Booking ID is the system's own short id, Reference ID is the
+  // guest/OTA-facing ref, Bill No. is the sequential accounting number (see
+  // Settings → Bill Numbering). Computed up front because the navy header
+  // band has to grow to fit however many are toggled on — with all of them
+  // on (the default), 4 lines don't fit the old fixed 38mm band and the
+  // last one (usually Bill No.) spills onto white background where its
+  // light header color is unreadable.
+  const headerLines = [`Date: ${fmtDate(todayISO())}`];
+  if (show("pdf_show_reference_id") && booking.booking_ref) headerLines.push(`Ref: ${booking.booking_ref}`);
+  if (show("pdf_show_booking_id")) headerLines.push(`Booking ID: ${booking.id.slice(0, 8).toUpperCase()}`);
+  if (show("pdf_show_bill_no") && booking.bill_no) headerLines.push(`Bill No: ${booking.bill_no}`);
+  const bandHeight = Math.max(38, 24 + (headerLines.length - 1) * 6 + 8);
+
   doc.setFillColor(...NAVY);
-  doc.rect(0, 0, 210, 38, "F");
+  doc.rect(0, 0, 210, bandHeight, "F");
 
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
@@ -424,38 +438,31 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(220, 220, 225);
-  // Booking ID / Reference ID / Bill No. are three distinct identifiers —
-  // Booking ID is the system's own short id, Reference ID is the
-  // guest/OTA-facing ref, Bill No. is the sequential accounting number (see
-  // Settings → Bill Numbering).
-  const headerLines = [`Date: ${fmtDate(todayISO())}`];
-  if (show("pdf_show_reference_id") && booking.booking_ref) headerLines.push(`Ref: ${booking.booking_ref}`);
-  if (show("pdf_show_booking_id")) headerLines.push(`Booking ID: ${booking.id.slice(0, 8).toUpperCase()}`);
-  if (show("pdf_show_bill_no") && booking.bill_no) headerLines.push(`Bill No: ${booking.bill_no}`);
   headerLines.forEach((line, i) => doc.text(line, 196, 24 + i * 6, { align: "right" }));
 
+  const boxY = bandHeight + 8;
   doc.setFillColor(...LIGHT);
-  doc.roundedRect(14, 46, 182, 26, 2, 2, "F");
+  doc.roundedRect(14, boxY, 182, 26, 2, 2, "F");
   doc.setTextColor(...NAVY);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text(guest ? guest.name : "Guest removed", 20, 55);
+  doc.text(guest ? guest.name : "Guest removed", 20, boxY + 9);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(70, 83, 107);
-  doc.text(guest?.phone || "", 20, 61);
-  doc.text(`Room ${room ? room.number : "—"} · ${room ? room.type : ""}`, 110, 55);
-  doc.text(`${fmtDate(booking.check_in)}  to  ${fmtDate(booking.check_out)}  (${booking.nights} nights)`, 110, 61);
+  doc.text(guest?.phone || "", 20, boxY + 15);
+  doc.text(`Room ${room ? room.number : "—"} · ${room ? room.type : ""}`, 110, boxY + 9);
+  doc.text(`${fmtDate(booking.check_in)}  to  ${fmtDate(booking.check_out)}  (${booking.nights} nights)`, 110, boxY + 15);
   const guestSourceParts = [];
   if (show("pdf_show_occupancy")) {
     const occ = 1 + (booking.co_guests_count || 0);
     guestSourceParts.push(`${occ} guest${occ === 1 ? "" : "s"}`);
   }
   if (booking.source) guestSourceParts.push(`Source: ${booking.source}`);
-  if (guestSourceParts.length) doc.text(guestSourceParts.join("  ·  "), 20, 67);
+  if (guestSourceParts.length) doc.text(guestSourceParts.join("  ·  "), 20, boxY + 21);
 
   autoTable(doc, {
-    startY: 80,
+    startY: boxY + 34,
     head: [["Description", "Amount"]],
     body: [
       ["Room charges", pdfMoney(booking.subtotal ?? booking.total)],

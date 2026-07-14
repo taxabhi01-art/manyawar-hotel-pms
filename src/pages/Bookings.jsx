@@ -1888,8 +1888,23 @@ function downloadBookingConfirmation(entries, guest, settings) {
   const multi = entries.length > 1;
   const gstPercent = Number(settings.gst_percent || 0);
 
+  // Booking ID / Reference ID / Bill No. are three distinct identifiers —
+  // Booking ID is the system's own short id, Reference ID is the
+  // guest/OTA-facing ref the form calls "Booking ID / reference", and Bill
+  // No. is the sequential accounting number (see Settings → Bill Numbering).
+  // Computed up front because the navy header band has to grow to fit
+  // however many of these are toggled on — with all of them on (the
+  // default), 4 lines don't fit the old fixed 38mm band and the last one
+  // (usually Bill No.) spills onto white background where its light header
+  // color is unreadable.
+  const headerLines = [`Date: ${fmtDate(todayISO())}`];
+  if (show("pdf_show_reference_id") && first.booking_ref) headerLines.push(`Ref: ${first.booking_ref}`);
+  if (show("pdf_show_booking_id")) headerLines.push(`Booking ID: ${first.id.slice(0, 8).toUpperCase()}`);
+  if (show("pdf_show_bill_no") && first.bill_no) headerLines.push(`Bill No: ${first.bill_no}`);
+  const bandHeight = Math.max(38, 24 + (headerLines.length - 1) * 6 + 8);
+
   doc.setFillColor(...NAVY);
-  doc.rect(0, 0, 210, 38, "F");
+  doc.rect(0, 0, 210, bandHeight, "F");
 
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
@@ -1910,55 +1925,43 @@ function downloadBookingConfirmation(entries, guest, settings) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(220, 220, 225);
-  // Booking ID / Reference ID / Bill No. are three distinct identifiers —
-  // Booking ID is the system's own short id, Reference ID is the
-  // guest/OTA-facing ref the form calls "Booking ID / reference", and Bill
-  // No. is the sequential accounting number (see Settings → Bill Numbering).
-  const headerLines = [`Date: ${fmtDate(todayISO())}`];
-  if (show("pdf_show_reference_id") && first.booking_ref) headerLines.push(`Ref: ${first.booking_ref}`);
-  if (show("pdf_show_booking_id")) headerLines.push(`Booking ID: ${first.id.slice(0, 8).toUpperCase()}`);
-  if (show("pdf_show_bill_no") && first.bill_no) headerLines.push(`Bill No: ${first.bill_no}`);
   headerLines.forEach((line, i) => doc.text(line, 196, 24 + i * 6, { align: "right" }));
 
+  const boxY = bandHeight + 8;
   doc.setFillColor(...LIGHT);
-  doc.roundedRect(14, 46, 182, 32, 2, 2, "F");
+  doc.roundedRect(14, boxY, 182, 32, 2, 2, "F");
   doc.setTextColor(...NAVY);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text(guest ? guest.name : "Guest", 20, 55);
+  doc.text(guest ? guest.name : "Guest", 20, boxY + 9);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(70, 83, 107);
-  doc.text(guest?.phone || "", 20, 61);
-  if (guest?.email) doc.text(guest.email, 20, 67);
+  doc.text(guest?.phone || "", 20, boxY + 15);
+  if (guest?.email) doc.text(guest.email, 20, boxY + 21);
   const roomsLabel = entries.map(({ room }) => (room ? `${room.number} (${room.type})` : "—")).join(", ");
-  doc.text(`Room${multi ? "s" : ""}: ${roomsLabel}`, 110, 55);
-  doc.text(`${fmtDate(first.check_in)}  to  ${fmtDate(first.check_out)}  (${first.nights} night${first.nights > 1 ? "s" : ""})`, 110, 61);
+  doc.text(`Room${multi ? "s" : ""}: ${roomsLabel}`, 110, boxY + 9);
+  doc.text(`${fmtDate(first.check_in)}  to  ${fmtDate(first.check_out)}  (${first.nights} night${first.nights > 1 ? "s" : ""})`, 110, boxY + 15);
   const totalGuests = entries.reduce((s, e, i) => s + entryOccupancy(e, i), 0);
   const guestSourceParts = [];
   if (show("pdf_show_occupancy")) guestSourceParts.push(`${totalGuests} guest${totalGuests > 1 ? "s" : ""}`);
   if (first.source) guestSourceParts.push(`Source: ${first.source}`);
-  if (guestSourceParts.length) doc.text(guestSourceParts.join("  ·  "), 110, 67);
+  if (guestSourceParts.length) doc.text(guestSourceParts.join("  ·  "), 110, boxY + 21);
 
   // Each room's own occupancy shows next to its charge line (e.g. "Room 202
-  // (3 guests)") — not just the group total above.
-  const bodyRows = entries.flatMap(({ booking, room }, i) => {
+  // (3 guests)"). Discount/deposit/total move to the summary block below —
+  // this table is just the per-room room-charge breakdown.
+  const bodyRows = entries.map(({ booking, room }, i) => {
     const occ = entryOccupancy({ booking }, i);
     const occLabel = show("pdf_show_occupancy") ? ` (${occ} guest${occ === 1 ? "" : "s"})` : "";
-    const rows = [
-      [
-        `Room ${room ? room.number : "—"}${occLabel} — ${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""}`,
-        pdfMoney(booking.subtotal ?? booking.total),
-      ],
+    return [
+      `Room ${room ? room.number : "—"}${occLabel} — ${pdfMoney(booking.rate)} x ${booking.nights} night${booking.nights > 1 ? "s" : ""}`,
+      pdfMoney(booking.subtotal ?? booking.total),
     ];
-    if (show("pdf_show_deposit") && booking.deposit > 0) {
-      rows.push([`Advance / deposit received (${booking.deposit_mode || "Cash"}) — included in Amount paid below`, pdfMoney(booking.deposit)]);
-    }
-    return rows;
   });
 
   autoTable(doc, {
-    startY: 88,
+    startY: boxY + 42,
     head: [["Description", "Amount"]],
     body: bodyRows,
     theme: "plain",
@@ -1974,9 +1977,28 @@ function downloadBookingConfirmation(entries, guest, settings) {
   doc.line(120, y, 196, y);
   y += 7;
 
+  // Full breakdown: Subtotal, Discount (only the primary room ever carries
+  // one — see createBooking), Total, then GST/deposit/paid/balance below.
+  const subtotalSum = entries.reduce((s, { booking }) => s + (booking.subtotal ?? booking.total ?? 0), 0);
+  const discountSum = entries.reduce((s, { booking }) => s + (booking.discount || 0), 0);
   const grandTotal = entries.reduce((s, { booking }) => s + (booking.total || 0), 0);
+  const depositSum = entries.reduce((s, { booking }) => s + (booking.deposit || 0), 0);
   const totalPaid = entries.reduce((s, { booking }) => s + (booking.paid_amount || 0), 0);
   const balance = grandTotal - totalPaid;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  doc.setTextColor(70, 83, 107);
+  doc.text("Subtotal", 120, y);
+  doc.text(pdfMoney(subtotalSum), 196, y, { align: "right" });
+  y += 6;
+
+  if (discountSum > 0) {
+    doc.setTextColor(...BRASS);
+    doc.text("Discount" + (first.discount_reason ? ` (${first.discount_reason})` : ""), 120, y);
+    doc.text(`- ${pdfMoney(discountSum)}`, 196, y, { align: "right" });
+    y += 6;
+  }
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
@@ -1995,6 +2017,15 @@ function downloadBookingConfirmation(entries, guest, settings) {
     doc.setTextColor(120, 120, 120);
     doc.text(`(incl. GST ${gstPercent}%: ${pdfMoney(gst)} · taxable value: ${pdfMoney(base)})`, 120, y);
     y += 7;
+  }
+
+  if (show("pdf_show_deposit") && depositSum > 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BRASS);
+    doc.text(`Deposit / advance paid (${first.deposit_mode || "Cash"})`, 120, y);
+    doc.text(pdfMoney(depositSum), 196, y, { align: "right" });
+    y += 6;
   }
 
   doc.setFont("helvetica", "normal");
