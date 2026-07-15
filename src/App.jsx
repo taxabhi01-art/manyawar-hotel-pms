@@ -11,6 +11,7 @@ import Staff from "./pages/Staff.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
 import Finance from "./pages/Finance.jsx";
+import Accounts from "./pages/Accounts.jsx";
 import CalendarPage from "./pages/Calendar.jsx";
 import NightAudit from "./pages/NightAudit.jsx";
 import Inventory from "./pages/Inventory.jsx";
@@ -60,6 +61,7 @@ const BASE_NAV = [
 const OWNER_NAV = [
   { id: "nightaudit", label: "Night Audit" },
   { id: "finance", label: "Finance" },
+  { id: "accounts", label: "Accounts" },
   { id: "reports", label: "Reports" },
   { id: "activity", label: "Activity" },
   { id: "backup", label: "Backup" },
@@ -561,6 +563,9 @@ export default function App() {
               />
             )}
             {tab === "finance" && role === "owner" && <Finance bookings={data.bookings} guests={data.guests} expenses={data.expenses} staff={data.staff} reload={reload} />}
+            {tab === "accounts" && role === "owner" && (
+              <Accounts bookings={data.bookings} expenses={data.expenses} bookingServices={data.bookingServices} inventoryUsage={data.inventoryUsage} />
+            )}
             {tab === "reports" && role === "owner" && (
               <Reports rooms={data.rooms} guests={data.guests} bookings={data.bookings} staff={data.staff} attendance={data.attendance} />
             )}
