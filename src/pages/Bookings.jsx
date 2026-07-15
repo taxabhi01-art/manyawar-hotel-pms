@@ -174,6 +174,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const [cancelModal, setCancelModal] = useState(null);
   const [changeRoomModal, setChangeRoomModal] = useState(null);
   const [filter, setFilter] = useState("all");
+  const [dateField, setDateField] = useState("check_in"); // check_in | created_at
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState(false);
@@ -479,11 +480,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       displayGroups.filter((members) => {
         const primary = members[0];
         if (filter !== "all" && primary.status !== filter) return false;
-        if (dateFrom && primary.check_in < dateFrom) return false;
-        if (dateTo && primary.check_in > dateTo) return false;
+        const compareValue = dateField === "created_at" ? (primary.created_at || "").slice(0, 10) : primary.check_in;
+        if (dateFrom && compareValue < dateFrom) return false;
+        if (dateTo && compareValue > dateTo) return false;
         return true;
       }),
-    [displayGroups, filter, dateFrom, dateTo]
+    [displayGroups, filter, dateField, dateFrom, dateTo]
   );
 
   // On-demand confirmation PDF — pulls in every booking in the same group
@@ -538,7 +540,17 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         ))}
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <Field label="From (check-in date)">
+        <Field label="Filter dates by">
+          <div style={{ display: "flex", gap: 6 }}>
+            <Button variant={dateField === "check_in" ? "primary" : "ghost"} onClick={() => setDateField("check_in")}>
+              Check-in date
+            </Button>
+            <Button variant={dateField === "created_at" ? "primary" : "ghost"} onClick={() => setDateField("created_at")}>
+              Booked-on date
+            </Button>
+          </div>
+        </Field>
+        <Field label={dateField === "created_at" ? "From (booked on)" : "From (check-in date)"}>
           <input className="input" type="date" style={{ width: 160 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         </Field>
         <Field label="To">

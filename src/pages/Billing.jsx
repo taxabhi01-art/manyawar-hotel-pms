@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, whatsappLink, splitInclusiveGst, computeBookingTotal, PAYMENT_MODES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, whatsappLink, splitInclusiveGst, computeBookingTotal, sumPayments, PAYMENT_MODES } from "../components.jsx";
 import {
   addPayment,
   updatePaymentAndRecalc,
@@ -17,10 +17,12 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   const [payModal, setPayModal] = useState(null);
   const [editPaymentModal, setEditPaymentModal] = useState(null);
   const [serviceModal, setServiceModal] = useState(null);
+  const [settleModal, setSettleModal] = useState(null);
   const [settings, setSettings] = useState(null);
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
   const [periodTo, setPeriodTo] = useState("");
+  const [statusTab, setStatusTab] = useState("all"); // all | pending | settled
 
   useEffect(() => {
     getSettings().then(({ data }) => setSettings(data || {}));
@@ -31,7 +33,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   useEffect(() => {
     if (autoOpenPaymentFor) {
       const b = bookings.find((x) => x.id === autoOpenPaymentFor);
-      if (b && b.total - b.paid_amount > 0) setPayModal(b);
+      if (b && b.total - sumPayments(b) > 0) setPayModal(b);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoOpenPaymentFor]);
@@ -44,7 +46,11 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
     for (const line of lines) {
       await addPayment({ booking_id: booking.id, amount: line.amount, mode: line.mode, paid_on: paidOn || todayISO() });
     }
-    const newPaid = Math.min(booking.total, (booking.paid_amount || 0) + total);
+    // Recomputed from the actual payment rows (existing + this one) rather
+    // than incrementing the cached paid_amount column — matches how
+    // saveEditedPayment/removePayment already recompute from source, so a
+    // booking whose cached paid_amount ever drifted self-heals here too.
+    const newPaid = Math.min(booking.total, sumPayments(booking) + total);
     await updateBooking(booking.id, { paid_amount: newPaid });
     setPayModal(null);
     reload();
@@ -111,6 +117,31 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
     reload();
   };
 
+  // A booking that's received more in payments than its current total
+  // (guest paid before a late add-on was billed, a rounding/cash-tip
+  // overage, etc.) — "settling" it adds a booking_services line for the
+  // excess (same table Feature 1 uses, service_id left null since it's not
+  // tied to the catalog) so total rises to meet what was actually
+  // collected. This never touches payments/paid_amount — only the bill's
+  // total side moves, and existing service lines are untouched/still shown.
+  const settleExcess = async (booking, reason, amount) => {
+    const { error } = await addBookingService({
+      booking_id: booking.id,
+      service_id: null,
+      service_name: reason,
+      price: amount,
+      quantity: 1,
+    });
+    if (error) return alert(`Couldn't settle this excess: ${error.message}`);
+    const newServicesTotal = (booking.services_total || 0) + amount;
+    const newTotal = computeBookingTotal({ ...booking, services_total: newServicesTotal });
+    await updateBooking(booking.id, { services_total: newServicesTotal, total: newTotal });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Excess payment settled", `${g ? g.name : "Guest"}: ${reason} (${currency(amount)})`);
+    setSettleModal(null);
+    reload();
+  };
+
   // Deposits are recorded as a normal payment the moment a booking is created
   // (see createBooking in Bookings.jsx) — they're already in paid_amount and
   // in the payment list below, exactly like any other payment. There's no
@@ -118,10 +149,17 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   // genuinely needs reversing, delete or edit that payment entry (below,
   // Owner-only) the same way any other payment correction works.
 
+  // Settled = payments received exactly match the current total (rounded to
+  // the nearest rupee to absorb float noise) — anything else, whether a
+  // balance is still due OR an excess was overpaid, counts as Pending.
+  const isSettled = (b) => Math.round(sumPayments(b)) === Math.round(b.total);
+
   const sorted = bookings
     .slice()
     .sort((a, b) => (a.check_in < b.check_in ? 1 : -1))
     .filter((b) => {
+      if (statusTab === "pending" && isSettled(b)) return false;
+      if (statusTab === "settled" && !isSettled(b)) return false;
       if (periodFrom && b.check_in < periodFrom) return false;
       if (periodTo && b.check_in > periodTo) return false;
       const q = search.trim().toLowerCase();
@@ -135,7 +173,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
         (b.booking_ref || "").toLowerCase().includes(q)
       );
     });
-  const totalOutstanding = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
+  const totalOutstanding = bookings.reduce((s, b) => s + (b.total - sumPayments(b)), 0);
   const periodPreset = (fromDaysAgo, toDaysAgo = 0) => {
     const today = todayISO();
     setPeriodFrom(addDaysISO(today, -fromDaysAgo));
@@ -172,13 +210,40 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
           </Button>
         )}
       </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {[
+          { key: "all", label: "All" },
+          { key: "pending", label: "Pending" },
+          { key: "settled", label: "Settled" },
+        ].map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setStatusTab(t.key)}
+            className="btn-ghost"
+            style={{
+              fontSize: 12.5,
+              fontWeight: 600,
+              padding: "6px 12px",
+              borderRadius: 999,
+              background: statusTab === t.key ? "var(--ink)" : "transparent",
+              color: statusTab === t.key ? "var(--parchment)" : "var(--ink70)",
+              border: "1px solid var(--hairline)",
+              cursor: "pointer",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
       {sorted.length === 0 ? (
         <EmptyState text={bookings.length === 0 ? "No invoices yet — they appear once a booking is created." : "No bookings match your search/filter."} />
       ) : (
         sorted.map((b) => {
           const g = guests.find((x) => x.id === b.guest_id);
           const r = rooms.find((x) => x.id === b.room_id);
-          const balance = b.total - b.paid_amount;
+          const paid = sumPayments(b);
+          const balance = b.total - paid;
+          const excess = Math.max(0, paid - b.total);
           const items = inventoryUsage.filter((u) => u.booking_id === b.id);
           const svc = (bookingServices || []).filter((s) => s.booking_id === b.id);
           return (
@@ -200,13 +265,15 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                   {b.items_total > 0 && <div style={{ fontSize: 11, color: "var(--brass)" }}>+{currency(b.items_total)} items</div>}
                   {b.services_total > 0 && <div style={{ fontSize: 11, color: "var(--brass)" }}>+{currency(b.services_total)} services</div>}
                 </div>
-                <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(b.paid_amount)}</span>
+                <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(paid)}</span>
                 {b.deposit > 0 && (
                   <span style={{ fontSize: 11.5, color: "var(--brass)" }}>
                     Deposit {currency(b.deposit)} via {b.deposit_mode || "Cash"} (already in Paid, see payment list below)
                   </span>
                 )}
-                <Pill color={balance <= 0 ? "#5f8863" : "#a6452f"}>{balance <= 0 ? "Settled" : `Due ${currency(balance)}`}</Pill>
+                <Pill color={excess > 0 ? "#c99a3c" : balance <= 0 ? "#5f8863" : "#a6452f"}>
+                  {excess > 0 ? `Excess ${currency(excess)}` : balance <= 0 ? "Settled" : `Due ${currency(balance)}`}
+                </Pill>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {g?.phone && (
                     <a
@@ -225,6 +292,11 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                   <Button variant="ghost" onClick={() => setServiceModal(b)}>
                     + Add service
                   </Button>
+                  {excess > 0 && (
+                    <Button variant="ghost" onClick={() => setSettleModal(b)}>
+                      Settle excess
+                    </Button>
+                  )}
                   {balance > 0 && <Button onClick={() => setPayModal(b)}>Record payment</Button>}
                 </div>
               </div>
@@ -299,6 +371,13 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
           onSave={(service, quantity) => addServiceCharge(serviceModal, service, quantity)}
         />
       )}
+      {settleModal && (
+        <SettleExcessModal
+          excess={Math.max(0, sumPayments(settleModal) - settleModal.total)}
+          onClose={() => setSettleModal(null)}
+          onSave={(reason, amount) => settleExcess(settleModal, reason, amount)}
+        />
+      )}
     </div>
   );
 }
@@ -308,7 +387,8 @@ function buildBillMessage(booking, guest, room, settings, items, serviceUsage) {
   // Room rate is tax-inclusive — total stays exactly what's charged; GST is
   // just shown as a breakdown extracted from within that total.
   const { base, gst } = splitInclusiveGst(booking.total, gstPercent);
-  const balance = Math.max(0, booking.total - booking.paid_amount);
+  const paid = sumPayments(booking);
+  const balance = Math.max(0, booking.total - paid);
   const lines = [
     `${settings.hotel_name || "MANYAWAR HOTEL"} — Bill`,
     "",
@@ -331,7 +411,7 @@ function buildBillMessage(booking, guest, room, settings, items, serviceUsage) {
     "",
     `Total (amount payable): ${currency(booking.total)}`,
     gstPercent > 0 ? `  (incl. GST ${gstPercent}%: ${currency(gst)}, base: ${currency(base)})` : null,
-    `Paid: ${currency(booking.paid_amount)}`,
+    `Paid: ${currency(paid)}`,
     `Balance: ${currency(balance)}`,
     "",
     "Thank you for staying with us!",
@@ -340,7 +420,7 @@ function buildBillMessage(booking, guest, room, settings, items, serviceUsage) {
 }
 
 function PaymentModal({ booking, onClose, onSave }) {
-  const balance = booking.total - booking.paid_amount;
+  const balance = booking.total - sumPayments(booking);
   const [lines, setLines] = useState([{ amount: balance, mode: PAYMENT_MODES[0] }]);
   const [paidOn, setPaidOn] = useState(todayISO());
   const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
@@ -519,6 +599,47 @@ function AddServiceModal({ services, onClose, onSave }) {
   );
 }
 
+function SettleExcessModal({ excess, onClose, onSave }) {
+  const [amount, setAmount] = useState(excess);
+  const [reason, setReason] = useState("");
+  return (
+    <Modal title="Settle excess payment" onClose={onClose} width={420}>
+      <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
+        This booking has received {currency(excess)} more than its current total. Settling adds a line item for
+        that amount to the bill so the total matches what's actually been paid — it doesn't touch the payment
+        history itself.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="Amount">
+          <input className="input" type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
+        </Field>
+        <Field label="Reason / name (shown on the bill)">
+          <input
+            className="input"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Late Checkout Charge, Extra Bed, Adjustment"
+          />
+        </Field>
+      </div>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => {
+            if (!reason.trim()) return alert("Enter a reason/name for this charge.");
+            if (!amount || amount <= 0) return alert("Enter a valid amount.");
+            onSave(reason.trim(), Number(amount));
+          }}
+        >
+          Settle
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 // ---------------------------------------------------------------
 // TAX INVOICE — the formal invoice with GST breakdown
 // ---------------------------------------------------------------
@@ -538,7 +659,13 @@ function downloadTaxInvoice(booking, guest, room, settings, items, serviceUsage)
   // of that total, never added on top of it.
   const { base, gst } = splitInclusiveGst(booking.total, gstPercent);
   const grandTotal = booking.total;
-  const balance = grandTotal - booking.paid_amount;
+  // Summed fresh from the actual payment rows (same source the Payment
+  // history table below already reads from) rather than trusting
+  // booking.paid_amount — that cached column could show 0 here while
+  // Payment history correctly listed real payments summing above zero.
+  const actualPaid = sumPayments(booking);
+  const balance = grandTotal - actualPaid;
+  const excess = Math.max(0, actualPaid - grandTotal);
 
   const NAVY = [22, 35, 58];
   const BRASS = [184, 134, 63];
@@ -647,14 +774,26 @@ function downloadTaxInvoice(booking, guest, room, settings, items, serviceUsage)
   doc.setFontSize(9.5);
   doc.setTextColor(70, 83, 107);
   doc.text("Amount paid", 120, y);
-  doc.text(pdfMoney(booking.paid_amount), 196, y, { align: "right" });
+  doc.text(pdfMoney(actualPaid), 196, y, { align: "right" });
   y += 6;
 
   doc.setFont("helvetica", "bold");
   doc.setTextColor(balance > 0 ? 166 : 95, balance > 0 ? 69 : 136, balance > 0 ? 47 : 99);
   doc.text(balance > 0 ? "Balance due" : "Fully paid", 120, y);
   doc.text(pdfMoney(Math.max(0, balance)), 196, y, { align: "right" });
-  y += 12;
+  y += 8;
+
+  // Never let an overpayment quietly look like a normal fully-paid bill —
+  // call it out explicitly so it's obvious a "Settle excess" (Billing tab)
+  // or a refund is needed.
+  if (excess > 0) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BRASS);
+    doc.text(`Excess amount received: ${pdfMoney(excess)}`, 120, y);
+    y += 8;
+  }
+  y += 4;
 
   if (show("pdf_show_deposit") && booking.deposit > 0) {
     doc.setFont("helvetica", "normal");

@@ -326,6 +326,16 @@ export function computeBookingTotal(b) {
   return Math.max(0, subtotal - discount + early + late + items + services);
 }
 
+// The authoritative "amount paid" for a booking — summed fresh from its
+// actual payment rows rather than trusting the cached bookings.paid_amount
+// column, which can drift out of sync (e.g. a payment edited/deleted through
+// a path that didn't recompute it). Anywhere paid_amount is DISPLAYED should
+// go through this; writes to the paid_amount column itself still happen
+// via updatePaymentAndRecalc/etc. in lib/api.js.
+export function sumPayments(booking) {
+  return (booking.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+}
+
 // Room rate is tax-inclusive — the guest pays exactly `total`, GST is just
 // shown as a breakdown extracted FROM that amount, never added on top.
 export function splitInclusiveGst(total, gstPercent) {
