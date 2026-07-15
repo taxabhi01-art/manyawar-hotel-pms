@@ -52,6 +52,18 @@ export async function updatePayment(id, patch) {
 export async function deletePayment(id) {
   return supabase.from("payments").delete().eq("id", id);
 }
+// Shared by Billing.jsx (owner payment corrections) and Bookings.jsx (Edit
+// Booking's deposit edit) — the single place that edits a payments row AND
+// recomputes the booking's cached paid_amount from the full payment list, so
+// both call sites stay in lockstep instead of drifting.
+export async function updatePaymentAndRecalc(booking, paymentId, patch, extraBookingPatch = {}) {
+  const { error } = await updatePayment(paymentId, patch);
+  if (error) return { error };
+  const newPayments = (booking.payments || []).map((p) => (p.id === paymentId ? { ...p, ...patch } : p));
+  const newPaid = Math.min(booking.total, newPayments.reduce((s, p) => s + p.amount, 0));
+  await updateBooking(booking.id, { paid_amount: newPaid, ...extraBookingPatch });
+  return { newPaid };
+}
 
 // ---------- STAFF ----------
 export async function listStaff() {
@@ -141,6 +153,29 @@ export async function addInventoryUsage(usage) {
 }
 export async function deleteInventoryUsage(id) {
   return supabase.from("inventory_usage").delete().eq("id", id);
+}
+
+// ---------- SERVICES ----------
+export async function listServices() {
+  return supabase.from("services").select("*").order("name");
+}
+export async function addService(service) {
+  return supabase.from("services").insert(service).select().single();
+}
+export async function updateService(id, patch) {
+  return supabase.from("services").update(patch).eq("id", id);
+}
+export async function deleteService(id) {
+  return supabase.from("services").delete().eq("id", id);
+}
+export async function listBookingServices() {
+  return supabase.from("booking_services").select("*");
+}
+export async function addBookingService(usage) {
+  return supabase.from("booking_services").insert(usage).select().single();
+}
+export async function deleteBookingService(id) {
+  return supabase.from("booking_services").delete().eq("id", id);
 }
 
 // ---------- ACTIVITY LOG (owner notifications) ----------

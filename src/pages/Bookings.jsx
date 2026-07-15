@@ -34,6 +34,7 @@ import {
   addCoGuest,
   updateCoGuest,
   addPayment,
+  updatePaymentAndRecalc,
   uploadIdProof,
   getIdProofSignedUrl,
   logActivity,
@@ -329,7 +330,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   // that single room, and a newly-added row inserts a fresh booking sharing
   // the group's guest/dates — matching how createBooking builds a group in
   // the first place.
-  const saveBookingEditGroup = async (groupBookings, { checkIn, checkOut, source, bookingRef, discount, discountReason, depositNow, depositMode, rows }) => {
+  const saveBookingEditGroup = async (groupBookings, { checkIn, checkOut, source, bookingRef, discount, discountReason, depositNow, depositMode, rows, depositEdit }) => {
     const primary = groupBookings[0];
     const nights = nightsBetween(checkIn, checkOut);
     const activeRows = rows.filter((r) => !r.removed);
@@ -409,6 +410,25 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       await addPayment({ booking_id: primary.id, amount: Number(depositNow), mode: depositMode || "Cash", paid_on: todayISO() });
       await updateBooking(primary.id, { paid_amount: (primary.paid_amount || 0) + Number(depositNow) });
       logLines.push(`Payment recorded: ${currency(Number(depositNow))} via ${depositMode || "Cash"}`);
+    }
+
+    // Directly editing the original deposit — same shared update+recalc used
+    // by Billing.jsx's owner-only payment corrections, so both stay in sync.
+    // Also mirrors the edit into bookings.deposit/deposit_mode, since other
+    // screens (Billing card, PDF) read that snapshot rather than re-deriving
+    // it from the payment list.
+    if (depositEdit) {
+      const { error } = await updatePaymentAndRecalc(
+        primary,
+        depositEdit.paymentId,
+        { amount: depositEdit.amount, mode: depositEdit.mode },
+        { deposit: depositEdit.amount, deposit_mode: depositEdit.mode }
+      );
+      if (error) {
+        alert(`Couldn't update the deposit: ${error.message}`);
+      } else {
+        logLines.push(`Deposit corrected to ${currency(depositEdit.amount)} via ${depositEdit.mode}`);
+      }
     }
 
     const g = guestOf(primary.guest_id);
@@ -1257,6 +1277,19 @@ function EditBookingModal({ groupBookings, allBookings, rooms, maintenanceTicket
   const [depositNow, setDepositNow] = useState(0);
   const [depositMode, setDepositMode] = useState(PAYMENT_MODES[0]);
 
+  // The original deposit is just the payment inserted at booking-creation
+  // time (see createBooking) — identified here by matching amount+mode
+  // against the bookings.deposit/deposit_mode snapshot. If that payment has
+  // since been edited/deleted independently (e.g. from Billing), no match is
+  // found and we fall back to a read-only note instead of silently editing
+  // the wrong payment row.
+  const depositPayment =
+    primary.deposit > 0
+      ? (primary.payments || []).find((p) => p.amount === primary.deposit && p.mode === primary.deposit_mode) || null
+      : null;
+  const [depositAmount, setDepositAmount] = useState(depositPayment ? depositPayment.amount : primary.deposit || 0);
+  const [depositModeEdit, setDepositModeEdit] = useState(depositPayment ? depositPayment.mode : primary.deposit_mode || PAYMENT_MODES[0]);
+
   // Maintenance rooms are normally excluded, but a room the group already
   // holds stays selectable even if it's since been flagged for maintenance.
   const bookableRooms = useMemo(
@@ -1353,6 +1386,9 @@ function EditBookingModal({ groupBookings, allBookings, rooms, maintenanceTicket
       );
       if (!proceed) return;
     }
+    if (depositPayment && Number(depositAmount) < 0) return alert("Deposit amount can't be negative.");
+
+    const depositChanged = depositPayment && (Number(depositAmount) !== depositPayment.amount || depositModeEdit !== depositPayment.mode);
 
     onSave({
       checkIn,
@@ -1364,6 +1400,7 @@ function EditBookingModal({ groupBookings, allBookings, rooms, maintenanceTicket
       depositNow: Number(depositNow) || 0,
       depositMode,
       rows: roomRows.map((r) => ({ ...r, coGuestsCount: Number(r.coGuestsCount) || 0 })),
+      depositEdit: depositChanged ? { paymentId: depositPayment.id, amount: Number(depositAmount), mode: depositModeEdit } : null,
     });
   };
 
@@ -1474,6 +1511,33 @@ function EditBookingModal({ groupBookings, allBookings, rooms, maintenanceTicket
           </div>
         )}
       </div>
+
+      {primary.deposit > 0 && (
+        <div style={{ marginTop: 14, background: "#fff8ea", border: "1px solid rgba(201,154,60,0.4)", borderRadius: 8, padding: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink70)", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 8 }}>
+            Advance / deposit
+          </div>
+          {depositPayment ? (
+            <div className="grid-2">
+              <Field label="Amount">
+                <input className="input" type="number" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} />
+              </Field>
+              <Field label="Mode">
+                <select className="input" value={depositModeEdit} onChange={(e) => setDepositModeEdit(e.target.value)}>
+                  {PAYMENT_MODES.map((m) => (
+                    <option key={m}>{m}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          ) : (
+            <p style={{ fontSize: 12, color: "var(--ink45)", margin: 0 }}>
+              {currency(primary.deposit)} via {primary.deposit_mode || "Cash"} — this deposit's original payment entry has since changed;
+              edit it from the Billing tab instead.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid-2" style={{ marginTop: 14 }}>
         <Field label="Booking source">

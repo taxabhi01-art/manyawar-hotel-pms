@@ -14,6 +14,7 @@ import Finance from "./pages/Finance.jsx";
 import CalendarPage from "./pages/Calendar.jsx";
 import NightAudit from "./pages/NightAudit.jsx";
 import Inventory from "./pages/Inventory.jsx";
+import Services from "./pages/Services.jsx";
 import Maintenance from "./pages/Maintenance.jsx";
 import Activity from "./pages/Activity.jsx";
 import AddExpense from "./pages/AddExpense.jsx";
@@ -31,6 +32,8 @@ import {
   listNightAudits,
   listInventoryItems,
   listInventoryUsage,
+  listServices,
+  listBookingServices,
   listMaintenanceTickets,
   listActivityLog,
   getMyProfile,
@@ -49,6 +52,7 @@ const BASE_NAV = [
   { id: "guests", label: "Guests" },
   { id: "billing", label: "Billing" },
   { id: "inventory", label: "Inventory" },
+  { id: "services", label: "Services" },
   { id: "maintenance", label: "Maintenance" },
   { id: "addexpense", label: "Add Expense" },
   { id: "staff", label: "Staff" },
@@ -70,7 +74,7 @@ export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [data, setData] = useState({
     rooms: [], guests: [], bookings: [], staff: [], tasks: [], attendance: [], coGuests: [],
-    expenses: [], nightAudits: [], inventoryItems: [], inventoryUsage: [], maintenanceTickets: [], activityLog: [],
+    expenses: [], nightAudits: [], inventoryItems: [], inventoryUsage: [], services: [], bookingServices: [], maintenanceTickets: [], activityLog: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -116,7 +120,7 @@ export default function App() {
     setError(null);
     const [
       rooms, guests, bookings, staff, tasks, attendance, coGuests, expenses,
-      nightAudits, inventoryItems, inventoryUsage, maintenanceTickets, activityLog,
+      nightAudits, inventoryItems, inventoryUsage, services, bookingServices, maintenanceTickets, activityLog,
     ] = await Promise.all([
       listRooms(),
       listGuests(),
@@ -129,6 +133,8 @@ export default function App() {
       listNightAudits(),
       listInventoryItems(),
       listInventoryUsage(),
+      listServices(),
+      listBookingServices(),
       listMaintenanceTickets(),
       listActivityLog(),
     ]);
@@ -148,6 +154,8 @@ export default function App() {
       nightAudits: nightAudits.data || [],
       inventoryItems: inventoryItems.data || [],
       inventoryUsage: inventoryUsage.data || [],
+      services: services.data || [],
+      bookingServices: bookingServices.data || [],
       maintenanceTickets: maintenanceTickets.data || [],
       activityLog: activityLog.data || [],
     });
@@ -515,6 +523,8 @@ export default function App() {
                 guests={data.guests}
                 rooms={data.rooms}
                 inventoryUsage={data.inventoryUsage}
+                services={data.services}
+                bookingServices={data.bookingServices}
                 role={role}
                 autoOpenPaymentFor={autoOpenPaymentFor}
                 reload={reload}
@@ -530,6 +540,7 @@ export default function App() {
                 reload={reload}
               />
             )}
+            {tab === "services" && <Services services={data.services} reload={reload} />}
             {tab === "maintenance" && (
               <Maintenance tickets={data.maintenanceTickets} rooms={data.rooms} staff={data.staff} reload={reload} />
             )}

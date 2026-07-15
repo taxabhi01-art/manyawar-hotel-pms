@@ -322,7 +322,8 @@ export function computeBookingTotal(b) {
   const early = b.early_checkin_fee || 0;
   const late = b.late_checkout_fee || 0;
   const items = b.items_total || 0;
-  return Math.max(0, subtotal - discount + early + late + items);
+  const services = b.services_total || 0;
+  return Math.max(0, subtotal - discount + early + late + items + services);
 }
 
 // Room rate is tax-inclusive — the guest pays exactly `total`, GST is just

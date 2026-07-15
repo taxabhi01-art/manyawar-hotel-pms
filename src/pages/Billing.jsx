@@ -1,12 +1,22 @@
 import React, { useState, useEffect } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, whatsappLink, splitInclusiveGst, PAYMENT_MODES } from "../components.jsx";
-import { addPayment, updatePayment, deletePayment, updateBooking, getSettings, logActivity } from "../lib/api.js";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, whatsappLink, splitInclusiveGst, computeBookingTotal, PAYMENT_MODES } from "../components.jsx";
+import {
+  addPayment,
+  updatePaymentAndRecalc,
+  deletePayment,
+  updateBooking,
+  addBookingService,
+  deleteBookingService,
+  getSettings,
+  logActivity,
+} from "../lib/api.js";
 
-export default function Billing({ bookings, guests, rooms, inventoryUsage, role, autoOpenPaymentFor, reload }) {
+export default function Billing({ bookings, guests, rooms, inventoryUsage, services, bookingServices, role, autoOpenPaymentFor, reload }) {
   const [payModal, setPayModal] = useState(null);
   const [editPaymentModal, setEditPaymentModal] = useState(null);
+  const [serviceModal, setServiceModal] = useState(null);
   const [settings, setSettings] = useState(null);
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
@@ -42,12 +52,11 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
 
   // Owner-only correction tools — recomputes paid_amount from the full
   // payment list afterward so the booking total always stays accurate.
+  // updatePaymentAndRecalc is shared with the deposit-edit flow in
+  // Bookings.jsx's Edit Booking form, so both stay in lockstep.
   const saveEditedPayment = async (booking, payment, patch) => {
-    const { error } = await updatePayment(payment.id, patch);
+    const { error } = await updatePaymentAndRecalc(booking, payment.id, patch);
     if (error) return alert(`Couldn't update this payment: ${error.message}`);
-    const newPayments = (booking.payments || []).map((p) => (p.id === payment.id ? { ...p, ...patch } : p));
-    const newPaid = Math.min(booking.total, newPayments.reduce((s, p) => s + p.amount, 0));
-    await updateBooking(booking.id, { paid_amount: newPaid });
     const g = guests.find((x) => x.id === booking.guest_id);
     logActivity("Payment corrected", `${g ? g.name : "Guest"}: ${currency(payment.amount)} → ${currency(patch.amount)} (${patch.mode})`);
     setEditPaymentModal(null);
@@ -62,6 +71,43 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
     await updateBooking(booking.id, { paid_amount: newPaid });
     const g = guests.find((x) => x.id === booking.guest_id);
     logActivity("Payment deleted", `${g ? g.name : "Guest"}: ${currency(payment.amount)} · ${payment.mode}`);
+    reload();
+  };
+
+  // Service charges can be added at any stage of a booking (check-in day,
+  // mid-stay, or right at checkout) — not just at booking creation — so this
+  // lives in Billing.jsx rather than being folded into check-in/checkout.
+  // Mirrors Inventory.jsx's logUsage/voidUsage pattern for items_total, but
+  // against booking_services/services_total instead.
+  const addServiceCharge = async (booking, service, quantity) => {
+    const amount = service.price * quantity;
+    const { error } = await addBookingService({
+      booking_id: booking.id,
+      service_id: service.id,
+      service_name: service.name,
+      price: service.price,
+      quantity,
+    });
+    if (error) return alert(`Couldn't add this service: ${error.message}`);
+    const newServicesTotal = (booking.services_total || 0) + amount;
+    const newTotal = computeBookingTotal({ ...booking, services_total: newServicesTotal });
+    await updateBooking(booking.id, { services_total: newServicesTotal, total: newTotal });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Service charge added", `${g ? g.name : "Guest"}: ${service.name} ×${quantity} (${currency(amount)})`);
+    setServiceModal(null);
+    reload();
+  };
+
+  const removeServiceCharge = async (booking, bs) => {
+    const amount = bs.price * bs.quantity;
+    if (!confirm(`Remove "${bs.service_name} ×${bs.quantity}" (${currency(amount)}) from this bill?`)) return;
+    const { error } = await deleteBookingService(bs.id);
+    if (error) return alert(`Couldn't remove this service: ${error.message}`);
+    const newServicesTotal = Math.max(0, (booking.services_total || 0) - amount);
+    const newTotal = computeBookingTotal({ ...booking, services_total: newServicesTotal });
+    await updateBooking(booking.id, { services_total: newServicesTotal, total: newTotal });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Service charge removed", `${g ? g.name : "Guest"}: ${bs.service_name} ×${bs.quantity} (${currency(amount)})`);
     reload();
   };
 
@@ -134,6 +180,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
           const r = rooms.find((x) => x.id === b.room_id);
           const balance = b.total - b.paid_amount;
           const items = inventoryUsage.filter((u) => u.booking_id === b.id);
+          const svc = (bookingServices || []).filter((s) => s.booking_id === b.id);
           return (
             <div className="card" key={b.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -151,6 +198,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                     </div>
                   )}
                   {b.items_total > 0 && <div style={{ fontSize: 11, color: "var(--brass)" }}>+{currency(b.items_total)} items</div>}
+                  {b.services_total > 0 && <div style={{ fontSize: 11, color: "var(--brass)" }}>+{currency(b.services_total)} services</div>}
                 </div>
                 <span style={{ fontSize: 12, color: "var(--sage)" }}>Paid {currency(b.paid_amount)}</span>
                 {b.deposit > 0 && (
@@ -163,7 +211,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                   {g?.phone && (
                     <a
                       className="btn btn-ghost"
-                      href={whatsappLink(g.phone, buildBillMessage(b, g, r, settings || {}, items))}
+                      href={whatsappLink(g.phone, buildBillMessage(b, g, r, settings || {}, items, svc))}
                       target="_blank"
                       rel="noreferrer"
                       style={{ textDecoration: "none" }}
@@ -171,8 +219,11 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                       Send bill via WhatsApp
                     </a>
                   )}
-                  <Button variant="ghost" onClick={() => downloadTaxInvoice(b, g, r, settings || {}, items)}>
+                  <Button variant="ghost" onClick={() => downloadTaxInvoice(b, g, r, settings || {}, items, svc)}>
                     Tax Invoice PDF
+                  </Button>
+                  <Button variant="ghost" onClick={() => setServiceModal(b)}>
+                    + Add service
                   </Button>
                   {balance > 0 && <Button onClick={() => setPayModal(b)}>Record payment</Button>}
                 </div>
@@ -182,6 +233,22 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
                   {items.map((it) => (
                     <span key={it.id} style={{ fontSize: 11.5, color: "var(--brass)", fontFamily: "var(--font-mono)" }}>
                       {it.item_name} ×{it.quantity} = {currency(it.amount)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {svc.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {svc.map((s) => (
+                    <span key={s.id} style={{ fontSize: 11.5, color: "var(--brass)", fontFamily: "var(--font-mono)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      {s.service_name} ×{s.quantity} — {currency(s.price * s.quantity)}
+                      <button
+                        onClick={() => removeServiceCharge(b, s)}
+                        title="Remove this service charge"
+                        style={{ all: "unset", cursor: "pointer", color: "var(--rust)", fontSize: 11 }}
+                      >
+                        ✕
+                      </button>
                     </span>
                   ))}
                 </div>
@@ -225,11 +292,18 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, role,
           onSave={(patch) => saveEditedPayment(editPaymentModal.booking, editPaymentModal.payment, patch)}
         />
       )}
+      {serviceModal && (
+        <AddServiceModal
+          services={services || []}
+          onClose={() => setServiceModal(null)}
+          onSave={(service, quantity) => addServiceCharge(serviceModal, service, quantity)}
+        />
+      )}
     </div>
   );
 }
 
-function buildBillMessage(booking, guest, room, settings, items) {
+function buildBillMessage(booking, guest, room, settings, items, serviceUsage) {
   const gstPercent = Number(settings.gst_percent || 0);
   // Room rate is tax-inclusive — total stays exactly what's charged; GST is
   // just shown as a breakdown extracted from within that total.
@@ -247,7 +321,13 @@ function buildBillMessage(booking, guest, room, settings, items) {
     booking.discount > 0 ? `Discount: - ${currency(booking.discount)}` : null,
     booking.early_checkin_fee > 0 ? `Early check-in fee: ${currency(booking.early_checkin_fee)}` : null,
     booking.late_checkout_fee > 0 ? `Late checkout fee: ${currency(booking.late_checkout_fee)}` : null,
-    ...(items && items.length > 0 ? ["", "Items/Services:", ...items.map((it) => `  ${it.item_name} ×${it.quantity} = ${currency(it.amount)}`)] : []),
+    ...(() => {
+      const lines = [
+        ...(items || []).map((it) => `  ${it.item_name} ×${it.quantity} = ${currency(it.amount)}`),
+        ...(serviceUsage || []).map((s) => `  ${s.service_name} ×${s.quantity} = ${currency(s.price * s.quantity)}`),
+      ];
+      return lines.length > 0 ? ["", "Items/Services:", ...lines] : [];
+    })(),
     "",
     `Total (amount payable): ${currency(booking.total)}`,
     gstPercent > 0 ? `  (incl. GST ${gstPercent}%: ${currency(gst)}, base: ${currency(base)})` : null,
@@ -377,6 +457,68 @@ function EditPaymentModal({ payment, onClose, onSave }) {
   );
 }
 
+function AddServiceModal({ services, onClose, onSave }) {
+  const activeServices = services.filter((s) => s.is_active !== false);
+  const [search, setSearch] = useState("");
+  const filtered = activeServices.filter((s) => s.name.toLowerCase().includes(search.trim().toLowerCase()));
+  const [serviceId, setServiceId] = useState(activeServices[0]?.id || "");
+  const [quantity, setQuantity] = useState(1);
+
+  const onSearchChange = (value) => {
+    setSearch(value);
+    const stillVisible = activeServices.filter((s) => s.name.toLowerCase().includes(value.trim().toLowerCase()));
+    if (!stillVisible.some((s) => s.id === serviceId)) setServiceId(stillVisible[0]?.id || "");
+  };
+
+  const service = activeServices.find((s) => s.id === serviceId);
+  const amount = service ? service.price * quantity : 0;
+
+  return (
+    <Modal title="Add service charge" onClose={onClose} width={420}>
+      {activeServices.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: "var(--rust)" }}>No active services in the catalog — add one from the Services tab first.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Field label="Search services">
+            <input className="input" value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search…" />
+          </Field>
+          <Field label="Service">
+            <select className="input" value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
+              {filtered.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({currency(s.price)})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Quantity">
+            <input className="input" type="number" min={1} value={quantity} onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))} />
+          </Field>
+          {service && (
+            <div style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "8px 12px", fontSize: 13 }}>
+              Amount to add to bill: <strong>{currency(amount)}</strong>
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          disabled={!service}
+          onClick={() => {
+            if (!service) return;
+            onSave(service, quantity);
+          }}
+        >
+          Add to bill
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 // ---------------------------------------------------------------
 // TAX INVOICE — the formal invoice with GST breakdown
 // ---------------------------------------------------------------
@@ -387,7 +529,7 @@ function pdfMoney(n) {
 // `settings` also carries the "Print on Bill" toggles (pdf_show_*, all
 // default ON — see Settings.jsx) that decide which optional sections below
 // actually render.
-function downloadTaxInvoice(booking, guest, room, settings, items) {
+function downloadTaxInvoice(booking, guest, room, settings, items, serviceUsage) {
   const show = (key) => settings[key] !== false;
   const doc = new jsPDF();
   const gstPercent = Number(settings.gst_percent || 0);
@@ -470,6 +612,7 @@ function downloadTaxInvoice(booking, guest, room, settings, items) {
       ...(booking.early_checkin_fee > 0 ? [["Early check-in fee", pdfMoney(booking.early_checkin_fee)]] : []),
       ...(booking.late_checkout_fee > 0 ? [["Late checkout fee", pdfMoney(booking.late_checkout_fee)]] : []),
       ...((items || []).map((it) => [`${it.item_name} × ${it.quantity}`, pdfMoney(it.amount)])),
+      ...((serviceUsage || []).map((s) => [`${s.service_name} × ${s.quantity}`, pdfMoney(s.price * s.quantity)])),
     ],
     theme: "plain",
     styles: { fontSize: 10, textColor: NAVY, cellPadding: { top: 4, bottom: 4, left: 4, right: 4 } },
