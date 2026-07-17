@@ -435,6 +435,41 @@ export function groupTotal(booking, allBookings) {
   return groupOfBooking(booking, allBookings).reduce((s, m) => s + (m.total || 0), 0);
 }
 
+// Splits every booking into display-ready groups — ONE unit per structural
+// group's active members, plus a separate standalone unit per cancelled/
+// no-show member (so a cancelled room doesn't inflate its group's combined
+// total/balance, but still shows up under a Cancelled filter). This is the
+// only correct way to build a FULL deduplicated list of groups; do not
+// build one by calling groupOfBooking() per booking in a loop instead —
+// that lookup is intentionally asymmetric (a cancelled booking's own
+// lookup pulls in its active siblings, so check-in/out flows never miss a
+// cancelled sibling; an active booking's lookup excludes cancelled
+// siblings, so they don't clutter a check-in/out modal) and looping it
+// over a mixed active+cancelled cluster can put the same active room into
+// two different groups depending on iteration order.
+export function computeDisplayGroups(allBookings) {
+  const keyMap = computeGroupKeyMap(allBookings);
+  const byKey = new Map();
+  const order = [];
+  allBookings.forEach((b) => {
+    const k = keyMap.get(b.id);
+    if (!byKey.has(k)) {
+      byKey.set(k, []);
+      order.push(k);
+    }
+    byKey.get(k).push(b);
+  });
+  const units = [];
+  order.forEach((k) => {
+    const members = orderGroupPrimaryFirst(byKey.get(k));
+    const active = members.filter((m) => m.status !== "cancelled" && m.status !== "no-show");
+    const inactive = members.filter((m) => m.status === "cancelled" || m.status === "no-show");
+    if (active.length > 0) units.push(active);
+    inactive.forEach((m) => units.push([m]));
+  });
+  return units;
+}
+
 // Room rate is tax-inclusive — the guest pays exactly `total`, GST is just
 // shown as a breakdown extracted FROM that amount, never added on top.
 export function splitInclusiveGst(total, gstPercent) {

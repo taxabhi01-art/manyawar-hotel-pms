@@ -22,8 +22,7 @@ import {
   whatsappLink,
   splitInclusiveGst,
   sumPayments,
-  computeGroupKeyMap,
-  orderGroupPrimaryFirst,
+  computeDisplayGroups,
   isPrimaryInGroup,
   BOOKING_SOURCES,
   PAYMENT_MODES,
@@ -369,37 +368,12 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   };
 
   // Multi-room bookings are stored as separate rows sharing the same guest +
-  // dates + ref-derivation (see computeGroupKeyMap above) — grouped here so
-  // the list can show ONE combined card per group instead of one per room.
-  const groupKeyMap = useMemo(() => computeGroupKeyMap(bookings), [bookings]);
-  const groupList = useMemo(() => {
-    const byKey = new Map();
-    const order = [];
-    bookings.forEach((b) => {
-      const k = groupKeyMap.get(b.id);
-      if (!byKey.has(k)) {
-        byKey.set(k, []);
-        order.push(k);
-      }
-      byKey.get(k).push(b);
-    });
-    return order.map((k) => orderGroupPrimaryFirst(byKey.get(k)));
-  }, [bookings, groupKeyMap]);
-  // A cancelled/no-show room shouldn't inflate its group's combined total/
-  // balance/room count, and needs to still be reachable under the Cancelled/
-  // No-Show filter tabs — so split each structural group into its active
-  // members (one combined card) and any inactive members (each its own
-  // standalone card, same as before this feature existed).
-  const displayGroups = useMemo(() => {
-    const units = [];
-    groupList.forEach((members) => {
-      const active = members.filter((m) => m.status !== "cancelled" && m.status !== "no-show");
-      const inactive = members.filter((m) => m.status === "cancelled" || m.status === "no-show");
-      if (active.length > 0) units.push(active);
-      inactive.forEach((m) => units.push([m]));
-    });
-    return units;
-  }, [groupList]);
+  // dates + ref-derivation — grouped here so the list can show ONE combined
+  // card per group instead of one per room. computeDisplayGroups (in
+  // components.jsx) also splits out cancelled/no-show members into their
+  // own standalone units so a cancelled room doesn't inflate its group's
+  // combined total/balance, but still shows up under the Cancelled filter.
+  const displayGroups = useMemo(() => computeDisplayGroups(bookings), [bookings]);
   const groupFor = (b) => displayGroups.find((members) => members.some((m) => m.id === b.id)) || [b];
   // Filtering applies to the group as a whole (via its primary booking) —
   // a group is one visual/behavioral unit, so it's all-in or all-out.

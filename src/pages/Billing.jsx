@@ -17,6 +17,7 @@ import {
   computeBookingTotal,
   sumPayments,
   groupOfBooking,
+  computeDisplayGroups,
   PAYMENT_MODES,
 } from "../components.jsx";
 import {
@@ -46,24 +47,23 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   }, []);
 
   // One card per linked booking — every room sharing a guest + dates +
-  // ref-derivation group (see groupOfBooking in components.jsx) — instead of
-  // one card per individual room row. A multi-room booking's deposit/
-  // payments concentrate on the primary room only (see createBooking in
-  // Bookings.jsx), so a per-room card would show a secondary room's own
-  // (often ₹0) paid amount against its own room-only total, which is
-  // exactly what made a multi-room booking's "Amount paid" look wrong. This
-  // mirrors the grouping Bookings.jsx already does for its own list.
-  const displayGroups = useMemo(() => {
-    const seen = new Set();
-    const groups = [];
-    bookings.forEach((b) => {
-      if (seen.has(b.id)) return;
-      const group = groupOfBooking(b, bookings);
-      group.forEach((m) => seen.add(m.id));
-      groups.push(group);
-    });
-    return groups;
-  }, [bookings]);
+  // ref-derivation group — instead of one card per individual room row. A
+  // multi-room booking's deposit/payments concentrate on the primary room
+  // only (see createBooking in Bookings.jsx), so a per-room card would show
+  // a secondary room's own (often ₹0) paid amount against its own
+  // room-only total, which is exactly what made a multi-room booking's
+  // "Amount paid" look wrong.
+  //
+  // Uses computeDisplayGroups (components.jsx) — the same symmetric
+  // clustering Bookings.jsx's own list uses — rather than building this
+  // list by calling groupOfBooking() per booking. groupOfBooking's
+  // per-booking lookup is intentionally asymmetric around cancelled/
+  // no-show members (see its comment), and looping it to build a FULL
+  // deduplicated list could put the same active room into two different
+  // groups whenever a linked booking mixes active and cancelled rooms —
+  // that produced exactly the "one multi-room booking generates two bills"
+  // bug this fixes.
+  const displayGroups = useMemo(() => computeDisplayGroups(bookings), [bookings]);
 
   // Coming here right after checkout with a pending balance — jump straight
   // to "Record payment" for that booking's group instead of making staff hunt for it.
