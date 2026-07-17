@@ -352,6 +352,9 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                   <div className="sub">
                     {members.map((m) => rooms.find((r) => r.id === m.room_id)?.number || "—").join(", ")} · {primary.nights}n
                   </div>
+                  {primary.bill_no && (
+                    <div style={{ fontSize: 10.5, color: "var(--ink45)", fontFamily: "var(--font-mono)" }}>Bill No: {primary.bill_no}</div>
+                  )}
                 </div>
                 <div style={{ width: 110 }}>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>{currency(total)}</div>

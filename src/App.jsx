@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import { subscribeToPush, playNotificationBell, groupOfBooking, sumPayments } from "./components.jsx";
 import Login from "./pages/Login.jsx";
@@ -69,6 +69,75 @@ const OWNER_NAV = [
 ];
 
 const LAST_SEEN_KEY = "manyawar_last_seen_activity";
+
+// Swipe left/right between main tabs on touch devices — hand-rolled (no
+// gesture library) since this is the only place in the app that needs it.
+// Direction is decided once, on touchend, from the final delta — never
+// during touchmove — so native scroll physics/momentum are left
+// completely alone. Listeners are passive throughout since nothing here
+// ever calls preventDefault(). `tab` is read via a ref rather than being a
+// dependency, so the listeners are attached once instead of being torn
+// down/re-attached on every tab change.
+//
+// `mainEl` is the actual DOM node (from a callback ref / setState, not a
+// plain useRef) — a plain ref's identity never changes even once its
+// .current gets populated, so an effect depending on it would never
+// re-run once the .main element actually mounts (it doesn't exist yet on
+// the very first render, while the login/loading screens are showing).
+// Depending on the element itself via state guarantees this effect runs
+// again exactly when the node becomes available.
+function useSwipeNav(mainEl, nav, tab, setTab) {
+  const tabRef = useRef(tab);
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
+
+  useEffect(() => {
+    const el = mainEl;
+    if (!el) return;
+    let startX = 0;
+    let startY = 0;
+    let startTime = 0;
+    let active = false;
+
+    const onTouchStart = (e) => {
+      const target = e.target;
+      // The mobile nav strip has its own horizontal scroll, and modals
+      // aren't portals in this app (they render inline inside .main) — a
+      // swipe inside either shouldn't change tabs behind/around them.
+      if (target.closest(".sidebar") || target.closest(".modal-overlay")) {
+        active = false;
+        return;
+      }
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startTime = Date.now();
+      active = true;
+    };
+
+    const onTouchEnd = (e) => {
+      if (!active) return;
+      active = false;
+      const t = e.changedTouches[0];
+      const deltaX = t.clientX - startX;
+      const deltaY = t.clientY - startY;
+      if (Date.now() - startTime > 700) return; // slow drag-then-pause isn't a swipe
+      if (Math.abs(deltaX) < 70 || Math.abs(deltaX) < Math.abs(deltaY)) return;
+      const idx = nav.findIndex((n) => n.id === tabRef.current);
+      if (idx === -1) return;
+      if (deltaX < 0 && idx < nav.length - 1) setTab(nav[idx + 1].id);
+      else if (deltaX > 0 && idx > 0) setTab(nav[idx - 1].id);
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [mainEl, nav, setTab]);
+}
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
@@ -312,6 +381,43 @@ export default function App() {
     setTimeout(() => setHighlightId(null), 4000);
   };
 
+  // Tab order used by both the nav bar and swipe navigation below — moved
+  // above the early returns (and memoized) so the swipe hook can use it;
+  // it used to be computed later, right before the JSX return, purely for
+  // locality, which is preserved by reusing the same `nav` further down.
+  const nav = useMemo(() => (role === "owner" ? [...BASE_NAV, ...OWNER_NAV] : BASE_NAV), [role]);
+
+  // As a `display: standalone` PWA, there's no browser chrome back button
+  // on iOS/Android — the only "back" affordance is Android's OS-level back
+  // gesture/button. Without any history entries, that gesture exits the
+  // app immediately from any tab. Pushing one history entry per tab change
+  // (keyed on `tab` itself rather than wrapping every individual setTab
+  // call site — there are several: nav clicks, global search jumps, the
+  // post-checkout auto-open-billing jump, the activity banner's "View"
+  // button) means every path that changes tabs gets this for free, and
+  // back/forward then step through tab history instead of leaving the app.
+  const skipNextPush = useRef(false);
+  useEffect(() => {
+    const onPopState = (e) => {
+      if (e.state?.tab) {
+        skipNextPush.current = true; // this tab change came FROM back/forward — don't re-push it
+        setTab(e.state.tab);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  useEffect(() => {
+    if (skipNextPush.current) {
+      skipNextPush.current = false;
+      return;
+    }
+    history.pushState({ tab }, "");
+  }, [tab]);
+
+  const [mainEl, setMainEl] = useState(null);
+  useSwipeNav(mainEl, nav, tab, setTab);
+
   // Public route — guest scans a room QR code, no login needed at all.
   const reportRoom = new URLSearchParams(window.location.search).get("report");
   if (reportRoom) {
@@ -324,8 +430,6 @@ export default function App() {
   if (!session) {
     return <Login />;
   }
-
-  const nav = role === "owner" ? [...BASE_NAV, ...OWNER_NAV] : BASE_NAV;
 
   return (
     <div className="app">
@@ -430,7 +534,7 @@ export default function App() {
           <div className="muted">Signed in as {session.user.email}</div>
         </div>
       </div>
-      <div className="main">
+      <div className="main" ref={setMainEl}>
         {error && <div className="error-banner">{error}</div>}
 
         {role === "owner" && newActivityCount > 0 && tab !== "activity" && (
