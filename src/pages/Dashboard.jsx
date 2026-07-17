@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { SectionTitle, Pill, Button, Modal, currency, fmtDate, fmtDateTimeDayIST, todayISO, addDaysISO, STATUS } from "../components.jsx";
+import { SectionTitle, Pill, Button, Modal, currency, fmtDate, fmtDateTimeDayIST, todayISO, addDaysISO, STATUS, sumPayments, groupPaid, groupTotal } from "../components.jsx";
 
 export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheckIn, onOpenCheckOut }) {
   const [reservedModalOpen, setReservedModalOpen] = useState(false);
@@ -23,7 +23,7 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
   const monthPrefix = today.slice(0, 7);
   const revenueThisMonth = bookings
     .filter((b) => (b.check_in || "").startsWith(monthPrefix))
-    .reduce((sum, b) => sum + (b.paid_amount || 0), 0);
+    .reduce((sum, b) => sum + sumPayments(b), 0);
   const overstays = bookings.filter((b) => b.status === "checked-in" && b.check_out < today);
   const reservedBookings = bookings.filter((b) => b.status === "reserved").sort((a, b) => (a.check_in < b.check_in ? -1 : 1));
   const statusCounts = {
@@ -144,6 +144,7 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
       {departuresModalOpen && (
         <DeparturesModal
           bookings={checkoutsToday}
+          allBookings={bookings}
           guests={guests}
           rooms={rooms}
           onClose={() => setDeparturesModalOpen(false)}
@@ -321,14 +322,20 @@ function TomorrowListModal({ title, bookings, guests, rooms, onClose }) {
   );
 }
 
-function DeparturesModal({ bookings, guests, rooms, onClose, onCheckOut }) {
+// A departing room that's part of a multi-room booking only ever holds its
+// own room's payments/total — the deposit/payments concentrate on the
+// primary room (see createBooking in Bookings.jsx) — so this needs the
+// GROUP's balance, not this row's own, or a secondary room would show a
+// misleading "Due ₹X" for the full room charge even though the group's
+// deposit already covers it.
+function DeparturesModal({ bookings, allBookings, guests, rooms, onClose, onCheckOut }) {
   return (
     <Modal title="Departing today" onClose={onClose} width={460}>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {bookings.map((b) => {
           const g = guests.find((x) => x.id === b.guest_id);
           const r = rooms.find((x) => x.id === b.room_id);
-          const balance = b.total - b.paid_amount;
+          const balance = groupTotal(b, allBookings) - groupPaid(b, allBookings);
           return (
             <div key={b.id} style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 160 }}>

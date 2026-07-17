@@ -21,6 +21,10 @@ import {
   isLateCheckout,
   whatsappLink,
   splitInclusiveGst,
+  sumPayments,
+  computeGroupKeyMap,
+  orderGroupPrimaryFirst,
+  isPrimaryInGroup,
   BOOKING_SOURCES,
   PAYMENT_MODES,
   BOOKING_STATUS_COLORS,
@@ -41,82 +45,6 @@ import {
   getSettings,
 } from "../lib/api.js";
 
-// Multi-room bookings are stored as separate rows sharing the same guest +
-// dates (see createBooking below), with no explicit "which room is primary"
-// flag or "group id" in the DB. createBooking encodes the relationship
-// structurally in the booking_ref instead: the first room's ref is left
-// exactly as typed, and every other room's ref is that SAME string with
-// "-2", "-3", … appended.
-//
-// Grouping by guest+dates ALONE is not enough — an unrelated older booking
-// for the same guest that happens to share the same check_in/check_out
-// (different, unrelated ref) must NOT be folded into the group, or the
-// room count shown in the UI comes out wrong. So grouping is two-level:
-// first cluster by (guest, check_in, check_out), then within each cluster
-// split further by ref-derivation — a booking only joins another's group if
-// its ref is exactly "<other's ref>-N", comparing actual sibling pairs
-// rather than pattern-matching a single ref in isolation (which would
-// misfire on a user-typed ref that merely ends in digits, e.g. "BUG-001").
-function refIsDerivedFrom(candidate, base) {
-  if (!candidate || !base || candidate === base) return false;
-  return candidate.startsWith(base + "-") && /^\d+$/.test(candidate.slice(base.length + 1));
-}
-
-// Map of booking.id -> group key, computed once over the full booking list.
-function computeGroupKeyMap(allBookings) {
-  const byDateGuest = new Map();
-  allBookings.forEach((b) => {
-    const k = `${b.guest_id}|${b.check_in}|${b.check_out}`;
-    if (!byDateGuest.has(k)) byDateGuest.set(k, []);
-    byDateGuest.get(k).push(b);
-  });
-  const keyMap = new Map();
-  byDateGuest.forEach((cluster, dateGuestKey) => {
-    cluster.forEach((b) => {
-      const parent = cluster.find((other) => other.id !== b.id && refIsDerivedFrom(b.booking_ref, other.booking_ref));
-      const rootRef = parent ? parent.booking_ref : b.booking_ref ?? b.id;
-      keyMap.set(b.id, `${dateGuestKey}|${rootRef}`);
-    });
-  });
-  return keyMap;
-}
-
-// Every ACTIVE sibling of `booking` (including itself), ordered primary-
-// first then by increasing ref suffix — what the confirmation PDF, combined
-// check-in/out, and the "N guests" totals all assume. Cancelled/no-show
-// siblings are deliberately excluded: a cancelled room shouldn't be swept
-// into a combined check-in, and if the structural primary itself was
-// cancelled, whichever active room is left becomes the new primary (gets
-// the main guest's occupancy "+1") rather than leaving the group orphaned.
-// Recomputes the group map each call; callers iterating many bookings
-// should memoize computeGroupKeyMap once and do their own filtering instead
-// (see the Bookings component below).
-export function groupOfBooking(booking, allBookings) {
-  const keyMap = computeGroupKeyMap(allBookings);
-  const key = keyMap.get(booking.id);
-  const siblings = allBookings.filter(
-    (b) => keyMap.get(b.id) === key && (b.id === booking.id || (b.status !== "cancelled" && b.status !== "no-show"))
-  );
-  return orderGroupPrimaryFirst(siblings);
-}
-function orderGroupPrimaryFirst(siblings) {
-  if (siblings.length <= 1) return siblings.slice();
-  const primary =
-    siblings.find((b) => !siblings.some((other) => other.id !== b.id && refIsDerivedFrom(b.booking_ref, other.booking_ref))) ||
-    siblings[0];
-  const rank = (b) => {
-    if (b.id === primary.id) return 0;
-    if (refIsDerivedFrom(b.booking_ref, primary.booking_ref)) {
-      return Number(b.booking_ref.slice(primary.booking_ref.length + 1));
-    }
-    return Number.MAX_SAFE_INTEGER;
-  };
-  return siblings.slice().sort((a, c) => rank(a) - rank(c));
-}
-function isPrimaryInGroup(booking, allBookings) {
-  const group = groupOfBooking(booking, allBookings);
-  return group[0]?.id === booking.id;
-}
 // Smallest "-N" suffix not already used by any existing ref in the group —
 // for assigning a ref to a room added to the group during an edit (1 is
 // implicitly taken by the base ref itself).
@@ -571,7 +499,7 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           const g = guestOf(primary.guest_id);
           const isMulti = members.length > 1;
           const combinedTotal = members.reduce((s, m) => s + (m.total || 0), 0);
-          const combinedPaid = members.reduce((s, m) => s + (m.paid_amount || 0), 0);
+          const combinedPaid = members.reduce((s, m) => s + sumPayments(m), 0);
           const combinedBalance = combinedTotal - combinedPaid;
           const combinedDiscount = members.reduce((s, m) => s + (m.discount || 0), 0);
           const combinedItemsTotal = members.reduce((s, m) => s + (m.items_total || 0), 0);
@@ -1653,7 +1581,7 @@ export function CheckInModal({ bookings, guest, rooms, coGuestsByBooking, onClos
   // the same call for every one of them — determine it once from the first.
   const early = isEarlyCheckin(bookings[0]);
   const [earlyFee, setEarlyFee] = useState(0);
-  const balance = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
+  const balance = bookings.reduce((s, b) => s + (b.total - sumPayments(b)), 0);
 
   useEffect(() => {
     if (guest?.id_proof_front_path) {
@@ -1816,7 +1744,7 @@ export function CheckInModal({ bookings, guest, rooms, coGuestsByBooking, onClos
 // ---------------------------------------------------------------
 // bookings: every room in the group being checked out together (1 or more).
 export function CheckOutModal({ bookings, onClose, onConfirm }) {
-  const balance = bookings.reduce((s, b) => s + (b.total - b.paid_amount), 0);
+  const balance = bookings.reduce((s, b) => s + (b.total - sumPayments(b)), 0);
   const late = isLateCheckout(bookings[0]);
   const [lateFee, setLateFee] = useState(0);
 
@@ -2059,7 +1987,7 @@ function downloadBookingConfirmation(entries, guest, settings) {
   const discountSum = entries.reduce((s, { booking }) => s + (booking.discount || 0), 0);
   const grandTotal = entries.reduce((s, { booking }) => s + (booking.total || 0), 0);
   const depositSum = entries.reduce((s, { booking }) => s + (booking.deposit || 0), 0);
-  const totalPaid = entries.reduce((s, { booking }) => s + (booking.paid_amount || 0), 0);
+  const totalPaid = entries.reduce((s, { booking }) => s + sumPayments(booking), 0);
   const balance = grandTotal - totalPaid;
 
   doc.setFont("helvetica", "normal");

@@ -336,6 +336,105 @@ export function sumPayments(booking) {
   return (booking.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
 }
 
+// ---------------------------------------------------------------
+// MULTI-ROOM GROUPING — relocated from Bookings.jsx so every page that
+// displays money (Billing, Dashboard, ...) can resolve "every room in this
+// guest's linked booking" the same way Bookings.jsx already does, instead
+// of each page either re-deriving its own grouping or (as several did)
+// treating a single room row as if it were the whole booking.
+//
+// Multi-room bookings are stored as separate rows sharing the same guest +
+// dates (see createBooking in Bookings.jsx), with no explicit "which room
+// is primary" flag or "group id" in the DB. createBooking encodes the
+// relationship structurally in the booking_ref instead: the first room's
+// ref is left exactly as typed, and every other room's ref is that SAME
+// string with "-2", "-3", … appended.
+//
+// Grouping by guest+dates ALONE is not enough — an unrelated older booking
+// for the same guest that happens to share the same check_in/check_out
+// (different, unrelated ref) must NOT be folded into the group, or the
+// room count shown in the UI comes out wrong. So grouping is two-level:
+// first cluster by (guest, check_in, check_out), then within each cluster
+// split further by ref-derivation — a booking only joins another's group if
+// its ref is exactly "<other's ref>-N", comparing actual sibling pairs
+// rather than pattern-matching a single ref in isolation (which would
+// misfire on a user-typed ref that merely ends in digits, e.g. "BUG-001").
+export function refIsDerivedFrom(candidate, base) {
+  if (!candidate || !base || candidate === base) return false;
+  return candidate.startsWith(base + "-") && /^\d+$/.test(candidate.slice(base.length + 1));
+}
+
+// Map of booking.id -> group key, computed once over the full booking list.
+export function computeGroupKeyMap(allBookings) {
+  const byDateGuest = new Map();
+  allBookings.forEach((b) => {
+    const k = `${b.guest_id}|${b.check_in}|${b.check_out}`;
+    if (!byDateGuest.has(k)) byDateGuest.set(k, []);
+    byDateGuest.get(k).push(b);
+  });
+  const keyMap = new Map();
+  byDateGuest.forEach((cluster, dateGuestKey) => {
+    cluster.forEach((b) => {
+      const parent = cluster.find((other) => other.id !== b.id && refIsDerivedFrom(b.booking_ref, other.booking_ref));
+      const rootRef = parent ? parent.booking_ref : b.booking_ref ?? b.id;
+      keyMap.set(b.id, `${dateGuestKey}|${rootRef}`);
+    });
+  });
+  return keyMap;
+}
+
+export function orderGroupPrimaryFirst(siblings) {
+  if (siblings.length <= 1) return siblings.slice();
+  const primary =
+    siblings.find((b) => !siblings.some((other) => other.id !== b.id && refIsDerivedFrom(b.booking_ref, other.booking_ref))) ||
+    siblings[0];
+  const rank = (b) => {
+    if (b.id === primary.id) return 0;
+    if (refIsDerivedFrom(b.booking_ref, primary.booking_ref)) {
+      return Number(b.booking_ref.slice(primary.booking_ref.length + 1));
+    }
+    return Number.MAX_SAFE_INTEGER;
+  };
+  return siblings.slice().sort((a, c) => rank(a) - rank(c));
+}
+
+// Every ACTIVE sibling of `booking` (including itself), ordered primary-
+// first then by increasing ref suffix — what the confirmation PDF, combined
+// check-in/out, and the "N guests" totals all assume. Cancelled/no-show
+// siblings are deliberately excluded: a cancelled room shouldn't be swept
+// into a combined check-in, and if the structural primary itself was
+// cancelled, whichever active room is left becomes the new primary (gets
+// the main guest's occupancy "+1") rather than leaving the group orphaned.
+// Recomputes the group map each call; callers iterating many bookings
+// should memoize computeGroupKeyMap once and do their own filtering instead
+// (see displayGroups in Bookings.jsx and Billing.jsx for that pattern).
+export function groupOfBooking(booking, allBookings) {
+  const keyMap = computeGroupKeyMap(allBookings);
+  const key = keyMap.get(booking.id);
+  const siblings = allBookings.filter(
+    (b) => keyMap.get(b.id) === key && (b.id === booking.id || (b.status !== "cancelled" && b.status !== "no-show"))
+  );
+  return orderGroupPrimaryFirst(siblings);
+}
+
+export function isPrimaryInGroup(booking, allBookings) {
+  const group = groupOfBooking(booking, allBookings);
+  return group[0]?.id === booking.id;
+}
+
+// The canonical answer to "how much has this booking — including every
+// linked room — actually received," used anywhere a single booking row is
+// in scope but its whole group needs to be accounted for (e.g. Dashboard's
+// departures list). Where a group array is already resolved (Bookings.jsx's
+// list card, Billing.jsx), reduce it directly with sumPayments instead of
+// re-deriving the group here on every call.
+export function groupPaid(booking, allBookings) {
+  return groupOfBooking(booking, allBookings).reduce((s, m) => s + sumPayments(m), 0);
+}
+export function groupTotal(booking, allBookings) {
+  return groupOfBooking(booking, allBookings).reduce((s, m) => s + (m.total || 0), 0);
+}
+
 // Room rate is tax-inclusive — the guest pays exactly `total`, GST is just
 // shown as a breakdown extracted FROM that amount, never added on top.
 export function splitInclusiveGst(total, gstPercent) {

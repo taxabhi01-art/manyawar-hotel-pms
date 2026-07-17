@@ -60,7 +60,11 @@ export async function updatePaymentAndRecalc(booking, paymentId, patch, extraBoo
   const { error } = await updatePayment(paymentId, patch);
   if (error) return { error };
   const newPayments = (booking.payments || []).map((p) => (p.id === paymentId ? { ...p, ...patch } : p));
-  const newPaid = Math.min(booking.total, newPayments.reduce((s, p) => s + p.amount, 0));
+  // Deliberately not clamped to booking.total — a payment can legitimately
+  // exceed the booking's own total (see Settle Excess in Billing.jsx), and
+  // the cached column should reflect that accurately rather than silently
+  // capping it, which would make it drift from the real payment rows again.
+  const newPaid = newPayments.reduce((s, p) => s + p.amount, 0);
   await updateBooking(booking.id, { paid_amount: newPaid, ...extraBookingPatch });
   return { newPaid };
 }

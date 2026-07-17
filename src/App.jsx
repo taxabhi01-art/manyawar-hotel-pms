@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
-import { subscribeToPush, playNotificationBell } from "./components.jsx";
+import { subscribeToPush, playNotificationBell, groupOfBooking, sumPayments } from "./components.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Rooms from "./pages/Rooms.jsx";
-import Bookings, { CheckInModal, CheckOutModal, groupOfBooking } from "./pages/Bookings.jsx";
+import Bookings, { CheckInModal, CheckOutModal } from "./pages/Bookings.jsx";
 import Guests from "./pages/Guests.jsx";
 import Billing from "./pages/Billing.jsx";
 import Staff from "./pages/Staff.jsx";
@@ -272,7 +272,7 @@ export default function App() {
       // Auto-queue a cleaning task per room — any Housekeeping staff can pick it up (see Staff tab)
       await addTask({ staff_id: null, room_id: booking.room_id, task: "Clean room after checkout", done: false });
       combinedNewTotal += newTotal;
-      combinedPaid += booking.paid_amount;
+      combinedPaid += sumPayments(booking);
     }
     setCheckOutModal(null);
     // Pending balance across the group? Jump straight to Billing.

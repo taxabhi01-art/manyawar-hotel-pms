@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
-import { SectionTitle, Field, Button, Modal, currency, todayISO, addDaysISO, addMonthsISO } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, currency, todayISO, addDaysISO, addMonthsISO, sumPayments } from "../components.jsx";
 
 export default function Reports({ rooms, guests, bookings, staff, attendance }) {
   const [exportOpen, setExportOpen] = useState(false);
@@ -372,8 +372,8 @@ function exportToExcel({ rooms, guests, bookings, staff, attendance }, { start, 
           Subtotal: b.subtotal,
           Discount: b.discount || 0,
           Total: b.total,
-          Paid: b.paid_amount,
-          Balance: b.total - b.paid_amount,
+          Paid: sumPayments(b),
+          Balance: b.total - sumPayments(b),
           Deposit: b.deposit || 0,
           Status: b.status,
         };

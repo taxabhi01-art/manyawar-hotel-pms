@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
-import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, addMonthsISO, EXPENSE_CATEGORIES, PAYMENT_MODES } from "../components.jsx";
+import { SectionTitle, Field, Button, Modal, EmptyState, Pill, currency, fmtDate, todayISO, addDaysISO, addMonthsISO, sumPayments, EXPENSE_CATEGORIES, PAYMENT_MODES } from "../components.jsx";
 import { addExpense, updateExpense, deleteExpense, addStaff, logActivity, uploadExpenseReceipt, getExpenseReceiptSignedUrl } from "../lib/api.js";
 
 export default function Finance({ bookings, guests, expenses, staff, reload }) {
@@ -81,7 +81,7 @@ export default function Finance({ bookings, guests, expenses, staff, reload }) {
   const netUpiInRange = upiInRange - upiExpenseInRange;
   const netOtherInRange = otherModesInRange - otherExpenseInRange;
   const netInRange = totalReceivedInRange - expensesInRange;
-  const totalPending = bookings.reduce((s, b) => s + Math.max(0, (b.total || 0) - (b.paid_amount || 0)), 0);
+  const totalPending = bookings.reduce((s, b) => s + Math.max(0, (b.total || 0) - sumPayments(b)), 0);
 
   // ---- Cash flow chart data ----
   const chartData = useMemo(() => {
