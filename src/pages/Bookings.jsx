@@ -464,18 +464,23 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
   const groupFor = (b) => displayGroups.find((members) => members.some((m) => m.id === b.id)) || [b];
   // Filtering applies to the group as a whole (via its primary booking) —
   // a group is one visual/behavioral unit, so it's all-in or all-out.
-  const visibleGroups = useMemo(
-    () =>
-      displayGroups.filter((members) => {
-        const primary = members[0];
-        if (filter !== "all" && primary.status !== filter) return false;
-        const compareValue = dateField === "created_at" ? (primary.created_at || "").slice(0, 10) : primary.check_in;
-        if (dateFrom && compareValue < dateFrom) return false;
-        if (dateTo && compareValue > dateTo) return false;
-        return true;
-      }),
-    [displayGroups, filter, dateField, dateFrom, dateTo]
-  );
+  const visibleGroups = useMemo(() => {
+    const filtered = displayGroups.filter((members) => {
+      const primary = members[0];
+      if (filter !== "all" && primary.status !== filter) return false;
+      const compareValue = dateField === "created_at" ? (primary.created_at || "").slice(0, 10) : primary.check_in;
+      if (dateFrom && compareValue < dateFrom) return false;
+      if (dateTo && compareValue > dateTo) return false;
+      return true;
+    });
+    // Reserved specifically benefits from soonest-check-in-first — that's
+    // the order staff actually need to prep/check guests in. Other filters
+    // keep whatever order displayGroups already produced.
+    if (filter === "reserved") {
+      filtered.sort((a, b) => (a[0].check_in < b[0].check_in ? -1 : 1));
+    }
+    return filtered;
+  }, [displayGroups, filter, dateField, dateFrom, dateTo]);
 
   // On-demand confirmation PDF — pulls in every booking in the same group
   // so a multi-room stay gets one combined PDF no matter which room's card

@@ -3,6 +3,7 @@ import { SectionTitle, Pill, Button, Modal, currency, fmtDate, fmtDateTimeDayIST
 
 export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheckIn, onOpenCheckOut }) {
   const [reservedModalOpen, setReservedModalOpen] = useState(false);
+  const [roomStatusModal, setRoomStatusModal] = useState(null); // holds a STATUS key ("available" | "occupied" | "cleaning" | "maintenance")
   const [arrivalsModalOpen, setArrivalsModalOpen] = useState(false);
   const [departuresModalOpen, setDeparturesModalOpen] = useState(false);
   const [arrivalsTomorrowModalOpen, setArrivalsTomorrowModalOpen] = useState(false);
@@ -26,11 +27,11 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
     .reduce((sum, b) => sum + sumPayments(b), 0);
   const overstays = bookings.filter((b) => b.status === "checked-in" && b.check_out < today);
   const reservedBookings = bookings.filter((b) => b.status === "reserved").sort((a, b) => (a.check_in < b.check_in ? -1 : 1));
-  const statusCounts = {
-    available: rooms.filter((r) => r.status === "available").length,
-    occupied: rooms.filter((r) => r.status === "occupied").length,
-    cleaning: rooms.filter((r) => r.status === "cleaning").length,
-    maintenance: rooms.filter((r) => r.status === "maintenance").length,
+  const roomsByStatus = {
+    available: rooms.filter((r) => r.status === "available"),
+    occupied: rooms.filter((r) => r.status === "occupied"),
+    cleaning: rooms.filter((r) => r.status === "cleaning"),
+    maintenance: rooms.filter((r) => r.status === "maintenance"),
   };
 
   const stats = [
@@ -176,10 +177,18 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
       <SectionTitle eyebrow="Room status" title="Right now" />
       <div className="stat-grid">
         {Object.entries(STATUS).map(([k, v]) => (
-          <div className="stat-card" key={k}>
-            <div className="label">{v.label}</div>
-            <div className="value" style={{ color: v.color }}>{statusCounts[k]}</div>
-          </div>
+          <button
+            key={k}
+            className="stat-card"
+            onClick={() => roomsByStatus[k].length > 0 && setRoomStatusModal(k)}
+            style={{ all: "unset", cursor: roomsByStatus[k].length > 0 ? "pointer" : "default", display: "block" }}
+          >
+            <div className="stat-card">
+              <div className="label">{v.label}</div>
+              <div className="value" style={{ color: v.color }}>{roomsByStatus[k].length}</div>
+              {roomsByStatus[k].length > 0 && <div className="sub" style={{ color: "var(--brass)", fontWeight: 600 }}>Click to see rooms</div>}
+            </div>
+          </button>
         ))}
         <button
           className="stat-card"
@@ -226,6 +235,17 @@ export default function Dashboard({ rooms, bookings, guests, setTab, onOpenCheck
             </Button>
           </div>
         </Modal>
+      )}
+
+      {roomStatusModal && (
+        <RoomStatusModal
+          title={`${STATUS[roomStatusModal].label} rooms`}
+          roomList={roomsByStatus[roomStatusModal]}
+          statusKey={roomStatusModal}
+          bookings={bookings}
+          guests={guests}
+          onClose={() => setRoomStatusModal(null)}
+        />
       )}
 
       <SectionTitle
@@ -281,6 +301,52 @@ function ArrivalsModal({ bookings, guests, rooms, onClose, onCheckIn }) {
           );
         })}
       </div>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+// Drill-down for a Room Status card — same pattern as the other clickable
+// Dashboard stats (ArrivalsModal, TomorrowListModal). Only "occupied"
+// rooms have a guest worth showing: that status is set on the room row
+// directly (see Bookings.jsx's finishCheckIn/finishCheckOut), so the
+// guest has to be found via the room's current checked-in booking rather
+// than being on the room record itself. Available/Cleaning/Maintenance
+// rooms don't have a "current guest" concept, so those just list rooms.
+function RoomStatusModal({ title, roomList, statusKey, bookings, guests, onClose }) {
+  return (
+    <Modal title={title} onClose={onClose} width={460}>
+      {roomList.length === 0 ? (
+        <p style={{ fontSize: 13, color: "var(--ink45)", margin: 0 }}>No rooms in this status right now.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {roomList.map((r) => {
+            const booking = statusKey === "occupied" ? bookings.find((b) => b.room_id === r.id && b.status === "checked-in") : null;
+            const guest = booking ? guests.find((g) => g.id === booking.guest_id) : null;
+            return (
+              <div
+                key={r.id}
+                style={{ background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}
+              >
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, fontFamily: "var(--font-mono)" }}>Room {r.number}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink45)", textTransform: "uppercase" }}>{r.type}</div>
+                </div>
+                {statusKey === "occupied" && (
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{guest ? guest.name : "Guest removed"}</div>
+                    {booking && <div style={{ fontSize: 11.5, color: "var(--ink45)" }}>Until {fmtDate(booking.check_out)}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
         <Button variant="ghost" onClick={onClose}>
           Close

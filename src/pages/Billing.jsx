@@ -269,7 +269,6 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
 
   const sorted = displayGroups
     .slice()
-    .sort((a, b) => (a[0].check_in < b[0].check_in ? 1 : -1))
     .filter((members) => {
       if ((statusTab === "pending" || statusTab === "settled") && hasNothingToReconcile(members)) return false;
       if (statusTab === "pending" && isSettled(members)) return false;
@@ -286,6 +285,13 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
         members.some((m) => (rooms.find((r) => r.id === m.room_id)?.number || "").toLowerCase().includes(q)) ||
         (primary.booking_ref || "").toLowerCase().includes(q)
       );
+    })
+    .sort((a, b) => {
+      // Needs attention: checkout-soonest first — those are the most
+      // urgent to resolve. Every other view keeps the existing
+      // most-recent-check-in-first order.
+      if (statusTab === "pending") return a[0].check_out < b[0].check_out ? -1 : 1;
+      return a[0].check_in < b[0].check_in ? 1 : -1;
     });
   // Portfolio-wide total — summing each individual room row's own (total -
   // paid) is mathematically identical to summing per group here, since
@@ -402,6 +408,9 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                   </div>
                   <div className="sub">
                     {members.map((m) => rooms.find((r) => r.id === m.room_id)?.number || "—").join(", ")} · {primary.nights}n
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--ink70)" }}>
+                    {fmtDate(primary.check_in)} → {fmtDate(primary.check_out)}
                   </div>
                   {primary.bill_no && (
                     <div style={{ fontSize: 10.5, color: "var(--ink45)", fontFamily: "var(--font-mono)" }}>Bill No: {primary.bill_no}</div>
