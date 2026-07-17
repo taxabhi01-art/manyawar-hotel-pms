@@ -392,6 +392,18 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           patch.booking_ref = bookingRef.trim();
         }
         await updateBooking(original.id, patch);
+        // Mirrors changeRoom's free-old/occupy-new handling — Edit Booking
+        // is the ONLY way to reassign a room for a multi-room group (the
+        // dedicated "Change room" button is single-room only, see its
+        // !isMulti gate above), so without this, moving an already-
+        // checked-in booking to a different room here leaves the OLD
+        // room's cached status stuck at "occupied" forever with no
+        // booking left pointing at it — a room that never frees up on the
+        // Dashboard/Rooms board even though the guest has moved on.
+        if (room.id !== original.room_id && original.status === "checked-in") {
+          await updateRoom(original.room_id, { status: "cleaning" });
+          await updateRoom(room.id, { status: "occupied" });
+        }
         const changes = describeBookingChanges(original, patch, roomOf);
         if (changes.length) logLines.push(`Room ${room.number}: ${changes.join(", ")}`);
       } else {
