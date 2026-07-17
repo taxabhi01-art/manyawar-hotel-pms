@@ -42,7 +42,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
   const [periodTo, setPeriodTo] = useState("");
-  const [statusTab, setStatusTab] = useState("all"); // all | pending | settled
+  const [statusTab, setStatusTab] = useState("pending"); // all | pending | settled — defaults to Pending since that's what staff need to act on daily; "All" is one click away
 
   useEffect(() => {
     getSettings().then(({ data }) => setSettings(data || {}));
