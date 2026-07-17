@@ -37,7 +37,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   const [editPaymentModal, setEditPaymentModal] = useState(null); // { booking, payment } — booking is whichever specific room row owns that payment
   const [serviceModal, setServiceModal] = useState(null); // holds the group
   const [settleModal, setSettleModal] = useState(null); // holds the group
-  const [settleCancelledModal, setSettleCancelledModal] = useState(null); // holds the group
+  const [writeOffModal, setWriteOffModal] = useState(null); // holds the group
   const [settings, setSettings] = useState(null);
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
@@ -206,21 +206,22 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   // Cancelled/no-show bookings with a payment/total mismatch — typically a
   // deposit collected before the guest cancelled, leaving a "balance" that
   // will never actually be billed or collected since there's no stay left
-  // to charge for. Unlike Settle Excess (always a write-UP for an active
-  // booking's overpayment), this can go either direction: the common case
-  // is a shortfall (paid < total) that needs writing DOWN so the booking
-  // stops showing a misleading "Due" balance nobody's going to pay; a
-  // cancelled booking that happens to be overpaid still needs writing UP.
-  // Same underlying mechanism as settleExcess (a booking_services
-  // adjustment line + total recompute) — `adjustment` is just signed here
-  // instead of always-positive. Because it's a normal booking_services row
-  // like any other, it's automatically excluded from Accounts' P&L revenue
-  // the same way the booking's room charges already are (P&L filters out
-  // cancelled/no-show bookings at the booking level before summing any of
-  // room charges/services/inventory — see revenueBookingIds in
-  // Accounts.jsx), and it never touches payments/paid_amount, so Cash Flow
-  // (which reads real payment rows, not booking_services) is unaffected.
-  const settleCancelledBooking = async (members, reason, adjustment) => {
+  // to charge for. Called "Write off" (not "Settle") to read as a distinct
+  // action from Settle Excess — same underlying mechanism (a
+  // booking_services adjustment line + total recompute), but this one can
+  // go either direction: the common case is a shortfall (paid < total)
+  // that needs writing DOWN so the booking stops showing a misleading
+  // "Due" balance nobody's going to pay; a cancelled booking that happens
+  // to be overpaid still needs writing UP. `adjustment` is just signed
+  // here instead of always-positive like Settle Excess's. Because it's a
+  // normal booking_services row like any other, it's automatically
+  // excluded from Accounts' P&L revenue the same way the booking's room
+  // charges already are (P&L filters out cancelled/no-show bookings at
+  // the booking level before summing any of room charges/services/
+  // inventory — see revenueBookingIds in Accounts.jsx), and it never
+  // touches payments/paid_amount, so Cash Flow (which reads real payment
+  // rows, not booking_services) is unaffected.
+  const writeOffCancelledBooking = async (members, reason, adjustment) => {
     const booking = members[0];
     const { error } = await addBookingService({
       booking_id: booking.id,
@@ -229,13 +230,13 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
       price: adjustment,
       quantity: 1,
     });
-    if (error) return alert(`Couldn't settle this booking: ${error.message}`);
+    if (error) return alert(`Couldn't write off this booking: ${error.message}`);
     const newServicesTotal = (booking.services_total || 0) + adjustment;
     const newTotal = computeBookingTotal({ ...booking, services_total: newServicesTotal });
     await updateBooking(booking.id, { services_total: newServicesTotal, total: newTotal });
     const g = guests.find((x) => x.id === booking.guest_id);
-    logActivity("Cancelled booking settled", `${g ? g.name : "Guest"}: ${reason} (${currency(adjustment)})`);
-    setSettleCancelledModal(null);
+    logActivity("Cancelled booking written off", `${g ? g.name : "Guest"}: ${reason} (${currency(adjustment)})`);
+    setWriteOffModal(null);
     reload();
   };
 
@@ -361,7 +362,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
           const balance = total - paid;
           const excess = Math.max(0, paid - total);
           const isCancelled = isCancelledGroup(members);
-          const cancelledNeedsSettle = isCancelled && paid > 0 && Math.round(paid) !== Math.round(total);
+          const cancelledNeedsWriteOff = isCancelled && paid > 0 && Math.round(paid) !== Math.round(total);
           const discountSum = members.reduce((s, m) => s + (m.discount || 0), 0);
           const itemsTotalSum = members.reduce((s, m) => s + (m.items_total || 0), 0);
           const servicesTotalSum = members.reduce((s, m) => s + (m.services_total || 0), 0);
@@ -437,19 +438,20 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                   <Button variant="ghost" onClick={() => setServiceModal(members)}>
                     + Add service
                   </Button>
-                  {/* Cancelled/no-show bookings get ONE unified "Settle" action instead
-                      of Record Payment (no stay left to collect for) or Settle Excess
-                      (which only ever writes total UP) — it handles the payment/total
-                      gap in either direction. */}
+                  {/* Cancelled/no-show bookings get ONE unified "Write off" action
+                      instead of Record Payment (no stay left to collect for) or
+                      Settle Excess (which only ever writes total UP) — it handles
+                      the payment/total gap in either direction, and reads as a
+                      distinct action from Settle Excess rather than a variant of it. */}
                   {!isCancelled && excess > 0 && (
                     <Button variant="ghost" onClick={() => setSettleModal(members)}>
                       Settle excess
                     </Button>
                   )}
                   {!isCancelled && balance > 0 && <Button onClick={() => setPayModal(members)}>Record payment</Button>}
-                  {cancelledNeedsSettle && (
-                    <Button variant="ghost" onClick={() => setSettleCancelledModal(members)}>
-                      Settle
+                  {cancelledNeedsWriteOff && (
+                    <Button variant="ghost" onClick={() => setWriteOffModal(members)}>
+                      Write off
                     </Button>
                   )}
                 </div>
@@ -541,11 +543,11 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
           onSave={(reason, amount) => settleExcess(settleModal, reason, amount)}
         />
       )}
-      {settleCancelledModal && (
-        <SettleCancelledModal
-          gap={settleCancelledModal.reduce((s, m) => s + sumPayments(m), 0) - settleCancelledModal.reduce((s, m) => s + (m.total || 0), 0)}
-          onClose={() => setSettleCancelledModal(null)}
-          onSave={(reason, adjustment) => settleCancelledBooking(settleCancelledModal, reason, adjustment)}
+      {writeOffModal && (
+        <WriteOffModal
+          gap={writeOffModal.reduce((s, m) => s + sumPayments(m), 0) - writeOffModal.reduce((s, m) => s + (m.total || 0), 0)}
+          onClose={() => setWriteOffModal(null)}
+          onSave={(reason, adjustment) => writeOffCancelledBooking(writeOffModal, reason, adjustment)}
         />
       )}
     </div>
@@ -831,18 +833,20 @@ function SettleExcessModal({ excess, onClose, onSave }) {
 // common case (a deposit was collected, the booking was then cancelled,
 // and the remaining balance will never be billed or collected), positive
 // if a cancelled booking happens to be overpaid instead. Either way,
-// settling writes a single signed adjustment so total lands exactly on
-// what was actually paid.
-function SettleCancelledModal({ gap, onClose, onSave }) {
+// writing it off applies a single signed adjustment so total lands
+// exactly on what was actually paid. Named "Write off" (not "Settle") so
+// it reads as its own distinct action rather than a variant of Settle
+// Excess, even though it shares the same underlying mechanism.
+function WriteOffModal({ gap, onClose, onSave }) {
   const isShortfall = gap < 0;
   const [amount, setAmount] = useState(Math.abs(gap));
   const [reason, setReason] = useState(isShortfall ? "Booking cancelled — balance written off" : "");
   return (
-    <Modal title="Settle cancelled booking" onClose={onClose} width={420}>
+    <Modal title="Write off cancelled booking" onClose={onClose} width={420}>
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
         {isShortfall
-          ? `This cancelled booking still shows ${currency(Math.abs(gap))} as due, but since it's cancelled that balance will never actually be collected. Settling writes it off so the booking shows as Settled instead of sitting in Pending.`
-          : `This cancelled booking received ${currency(gap)} more than its total. Settling adds a line item for that amount so the total matches what was actually paid.`}
+          ? `This cancelled booking still shows ${currency(Math.abs(gap))} as due, but since it's cancelled that balance will never actually be collected. Writing it off marks the booking as Settled instead of sitting in Pending.`
+          : `This cancelled booking received ${currency(gap)} more than its total. Writing it off adds a line item for that amount so the total matches what was actually paid.`}
         {" "}It doesn't touch the payment history itself.
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -869,7 +873,7 @@ function SettleCancelledModal({ gap, onClose, onSave }) {
             onSave(reason.trim(), isShortfall ? -Number(amount) : Number(amount));
           }}
         >
-          Settle
+          Write off
         </Button>
       </div>
     </Modal>
