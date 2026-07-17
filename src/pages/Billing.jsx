@@ -37,6 +37,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   const [editPaymentModal, setEditPaymentModal] = useState(null); // { booking, payment } — booking is whichever specific room row owns that payment
   const [serviceModal, setServiceModal] = useState(null); // holds the group
   const [settleModal, setSettleModal] = useState(null); // holds the group
+  const [settleCancelledModal, setSettleCancelledModal] = useState(null); // holds the group
   const [settings, setSettings] = useState(null);
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
@@ -202,6 +203,42 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
     reload();
   };
 
+  // Cancelled/no-show bookings with a payment/total mismatch — typically a
+  // deposit collected before the guest cancelled, leaving a "balance" that
+  // will never actually be billed or collected since there's no stay left
+  // to charge for. Unlike Settle Excess (always a write-UP for an active
+  // booking's overpayment), this can go either direction: the common case
+  // is a shortfall (paid < total) that needs writing DOWN so the booking
+  // stops showing a misleading "Due" balance nobody's going to pay; a
+  // cancelled booking that happens to be overpaid still needs writing UP.
+  // Same underlying mechanism as settleExcess (a booking_services
+  // adjustment line + total recompute) — `adjustment` is just signed here
+  // instead of always-positive. Because it's a normal booking_services row
+  // like any other, it's automatically excluded from Accounts' P&L revenue
+  // the same way the booking's room charges already are (P&L filters out
+  // cancelled/no-show bookings at the booking level before summing any of
+  // room charges/services/inventory — see revenueBookingIds in
+  // Accounts.jsx), and it never touches payments/paid_amount, so Cash Flow
+  // (which reads real payment rows, not booking_services) is unaffected.
+  const settleCancelledBooking = async (members, reason, adjustment) => {
+    const booking = members[0];
+    const { error } = await addBookingService({
+      booking_id: booking.id,
+      service_id: null,
+      service_name: reason,
+      price: adjustment,
+      quantity: 1,
+    });
+    if (error) return alert(`Couldn't settle this booking: ${error.message}`);
+    const newServicesTotal = (booking.services_total || 0) + adjustment;
+    const newTotal = computeBookingTotal({ ...booking, services_total: newServicesTotal });
+    await updateBooking(booking.id, { services_total: newServicesTotal, total: newTotal });
+    const g = guests.find((x) => x.id === booking.guest_id);
+    logActivity("Cancelled booking settled", `${g ? g.name : "Guest"}: ${reason} (${currency(adjustment)})`);
+    setSettleCancelledModal(null);
+    reload();
+  };
+
   // Deposits are recorded as a normal payment the moment a booking is created
   // (see createBooking in Bookings.jsx) — they're already in paid_amount and
   // in the payment list below, exactly like any other payment. There's no
@@ -218,11 +255,20 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
     const paid = members.reduce((s, m) => s + sumPayments(m), 0);
     return Math.round(paid) === Math.round(total);
   };
+  const isCancelledGroup = (members) => members[0].status === "cancelled" || members[0].status === "no-show";
+  // A cancelled booking that never had a single rupee against it has
+  // nothing to reconcile — showing it as "Due" clutters Pending with
+  // bookings nobody's ever going to collect from, and it can never become
+  // "Settled" in any meaningful sense either. Only show it in the full
+  // "All" list, not either reconciliation-focused sub-tab.
+  const hasNothingToReconcile = (members) =>
+    isCancelledGroup(members) && members.reduce((s, m) => s + sumPayments(m), 0) === 0;
 
   const sorted = displayGroups
     .slice()
     .sort((a, b) => (a[0].check_in < b[0].check_in ? 1 : -1))
     .filter((members) => {
+      if ((statusTab === "pending" || statusTab === "settled") && hasNothingToReconcile(members)) return false;
       if (statusTab === "pending" && isSettled(members)) return false;
       if (statusTab === "settled" && !isSettled(members)) return false;
       const primary = members[0];
@@ -314,6 +360,8 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
           const paid = members.reduce((s, m) => s + sumPayments(m), 0);
           const balance = total - paid;
           const excess = Math.max(0, paid - total);
+          const isCancelled = isCancelledGroup(members);
+          const cancelledNeedsSettle = isCancelled && paid > 0 && Math.round(paid) !== Math.round(total);
           const discountSum = members.reduce((s, m) => s + (m.discount || 0), 0);
           const itemsTotalSum = members.reduce((s, m) => s + (m.items_total || 0), 0);
           const servicesTotalSum = members.reduce((s, m) => s + (m.services_total || 0), 0);
@@ -389,12 +437,21 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                   <Button variant="ghost" onClick={() => setServiceModal(members)}>
                     + Add service
                   </Button>
-                  {excess > 0 && (
+                  {/* Cancelled/no-show bookings get ONE unified "Settle" action instead
+                      of Record Payment (no stay left to collect for) or Settle Excess
+                      (which only ever writes total UP) — it handles the payment/total
+                      gap in either direction. */}
+                  {!isCancelled && excess > 0 && (
                     <Button variant="ghost" onClick={() => setSettleModal(members)}>
                       Settle excess
                     </Button>
                   )}
-                  {balance > 0 && <Button onClick={() => setPayModal(members)}>Record payment</Button>}
+                  {!isCancelled && balance > 0 && <Button onClick={() => setPayModal(members)}>Record payment</Button>}
+                  {cancelledNeedsSettle && (
+                    <Button variant="ghost" onClick={() => setSettleCancelledModal(members)}>
+                      Settle
+                    </Button>
+                  )}
                 </div>
               </div>
               {items.length > 0 && (
@@ -482,6 +539,13 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
           excess={Math.max(0, settleModal.reduce((s, m) => s + sumPayments(m), 0) - settleModal.reduce((s, m) => s + (m.total || 0), 0))}
           onClose={() => setSettleModal(null)}
           onSave={(reason, amount) => settleExcess(settleModal, reason, amount)}
+        />
+      )}
+      {settleCancelledModal && (
+        <SettleCancelledModal
+          gap={settleCancelledModal.reduce((s, m) => s + sumPayments(m), 0) - settleCancelledModal.reduce((s, m) => s + (m.total || 0), 0)}
+          onClose={() => setSettleCancelledModal(null)}
+          onSave={(reason, adjustment) => settleCancelledBooking(settleCancelledModal, reason, adjustment)}
         />
       )}
     </div>
@@ -754,6 +818,55 @@ function SettleExcessModal({ excess, onClose, onSave }) {
             if (!reason.trim()) return alert("Enter a reason/name for this charge.");
             if (!amount || amount <= 0) return alert("Enter a valid amount.");
             onSave(reason.trim(), Number(amount));
+          }}
+        >
+          Settle
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+// `gap` = total paid across the group minus its total — negative for the
+// common case (a deposit was collected, the booking was then cancelled,
+// and the remaining balance will never be billed or collected), positive
+// if a cancelled booking happens to be overpaid instead. Either way,
+// settling writes a single signed adjustment so total lands exactly on
+// what was actually paid.
+function SettleCancelledModal({ gap, onClose, onSave }) {
+  const isShortfall = gap < 0;
+  const [amount, setAmount] = useState(Math.abs(gap));
+  const [reason, setReason] = useState(isShortfall ? "Booking cancelled — balance written off" : "");
+  return (
+    <Modal title="Settle cancelled booking" onClose={onClose} width={420}>
+      <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
+        {isShortfall
+          ? `This cancelled booking still shows ${currency(Math.abs(gap))} as due, but since it's cancelled that balance will never actually be collected. Settling writes it off so the booking shows as Settled instead of sitting in Pending.`
+          : `This cancelled booking received ${currency(gap)} more than its total. Settling adds a line item for that amount so the total matches what was actually paid.`}
+        {" "}It doesn't touch the payment history itself.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="Amount">
+          <input className="input" type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
+        </Field>
+        <Field label="Reason / note (shown on the bill)">
+          <input
+            className="input"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Booking cancelled — balance written off"
+          />
+        </Field>
+      </div>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() => {
+            if (!reason.trim()) return alert("Enter a reason/note.");
+            if (!amount || amount <= 0) return alert("Enter a valid amount.");
+            onSave(reason.trim(), isShortfall ? -Number(amount) : Number(amount));
           }}
         >
           Settle
