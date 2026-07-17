@@ -675,6 +675,7 @@ function CancelBookingModal({ bookings, guest, rooms, onClose, onConfirm }) {
   const [reason, setReason] = useState("");
   const primary = bookings[0];
   const combinedTotal = bookings.reduce((s, b) => s + (b.total || 0), 0);
+  const combinedPaid = bookings.reduce((s, b) => s + sumPayments(b), 0);
   return (
     <Modal title={bookings.length > 1 ? "Cancel booking (all rooms)" : "Cancel booking"} onClose={onClose} width={420}>
       <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
@@ -686,6 +687,18 @@ function CancelBookingModal({ bookings, guest, rooms, onClose, onConfirm }) {
           {fmtDate(primary.check_in)} → {fmtDate(primary.check_out)} · {currency(combinedTotal)}
         </div>
       </div>
+      {combinedPaid > 0 && (
+        <div style={{ background: "#fff8ea", border: "1px solid rgba(201,154,60,0.4)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>
+            ⚠ {currency(combinedPaid)} already paid on this booking
+          </div>
+          <div style={{ fontSize: 12, color: "var(--ink70)", marginTop: 2 }}>
+            Cancelling does NOT refund or reverse this payment — it stays on record exactly as is. If it
+            needs to be refunded or reconciled, do that manually from the Billing tab (edit or delete the
+            payment entry) after cancelling.
+          </div>
+        </div>
+      )}
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
         {bookings.length > 1
           ? "This cancels ALL rooms in this group (marked \"Cancelled\") instead of deleting them — useful for history and reporting."

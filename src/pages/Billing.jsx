@@ -18,6 +18,7 @@ import {
   sumPayments,
   groupOfBooking,
   computeDisplayGroups,
+  BOOKING_STATUS_COLORS,
   PAYMENT_MODES,
 } from "../components.jsx";
 import {
@@ -327,6 +328,16 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
                 <div className="card-col">
                   <div className="title">
                     {g ? g.name : "Guest removed"}
+                    {(primary.status === "cancelled" || primary.status === "no-show") && (
+                      <span
+                        style={{
+                          marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: "#fff", textTransform: "capitalize",
+                          background: BOOKING_STATUS_COLORS[primary.status], borderRadius: 999, padding: "2px 8px",
+                        }}
+                      >
+                        {primary.status}
+                      </span>
+                    )}
                     {isMulti && (
                       <span
                         style={{
