@@ -42,7 +42,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   const [search, setSearch] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
   const [periodTo, setPeriodTo] = useState("");
-  const [statusTab, setStatusTab] = useState("pending"); // all | pending | settled — defaults to Pending since that's what staff need to act on daily; "All" is one click away
+  const [statusTab, setStatusTab] = useState("pending"); // all | pending | settled — "pending" is displayed as "Needs attention"; defaults there since that's what staff need to act on daily, "All" is one click away
 
   useEffect(() => {
     getSettings().then(({ data }) => setSettings(data || {}));
@@ -249,7 +249,9 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
 
   // Settled = payments received exactly match the current total (rounded to
   // the nearest rupee to absorb float noise) — anything else, whether a
-  // balance is still due OR an excess was overpaid, counts as Pending.
+  // balance is still due OR an excess was overpaid, counts as "Needs
+  // attention" (the pending tab — both directions genuinely need staff to
+  // do something, just not the same something).
   // Computed across the WHOLE group, not any single room.
   const isSettled = (members) => {
     const total = members.reduce((s, m) => s + (m.total || 0), 0);
@@ -258,10 +260,10 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
   };
   const isCancelledGroup = (members) => members[0].status === "cancelled" || members[0].status === "no-show";
   // A cancelled booking that never had a single rupee against it has
-  // nothing to reconcile — showing it as "Due" clutters Pending with
-  // bookings nobody's ever going to collect from, and it can never become
-  // "Settled" in any meaningful sense either. Only show it in the full
-  // "All" list, not either reconciliation-focused sub-tab.
+  // nothing to reconcile — showing it as "Due" clutters Needs Attention
+  // with bookings nobody's ever going to collect from, and it can never
+  // become "Settled" in any meaningful sense either. Only show it in the
+  // full "All" list, not either reconciliation-focused sub-tab.
   const hasNothingToReconcile = (members) =>
     isCancelledGroup(members) && members.reduce((s, m) => s + sumPayments(m), 0) === 0;
 
@@ -328,7 +330,7 @@ export default function Billing({ bookings, guests, rooms, inventoryUsage, servi
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {[
           { key: "all", label: "All" },
-          { key: "pending", label: "Pending" },
+          { key: "pending", label: "Needs attention" },
           { key: "settled", label: "Settled" },
         ].map((t) => (
           <button
@@ -845,7 +847,7 @@ function WriteOffModal({ gap, onClose, onSave }) {
     <Modal title="Write off cancelled booking" onClose={onClose} width={420}>
       <p style={{ fontSize: 12.5, color: "var(--ink45)", marginTop: 0 }}>
         {isShortfall
-          ? `This cancelled booking still shows ${currency(Math.abs(gap))} as due, but since it's cancelled that balance will never actually be collected. Writing it off marks the booking as Settled instead of sitting in Pending.`
+          ? `This cancelled booking still shows ${currency(Math.abs(gap))} as due, but since it's cancelled that balance will never actually be collected. Writing it off marks the booking as Settled instead of sitting in Needs attention.`
           : `This cancelled booking received ${currency(gap)} more than its total. Writing it off adds a line item for that amount so the total matches what was actually paid.`}
         {" "}It doesn't touch the payment history itself.
       </p>
