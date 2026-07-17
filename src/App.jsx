@@ -617,6 +617,7 @@ export default function App() {
                 coGuests={data.coGuests}
                 maintenanceTickets={data.maintenanceTickets}
                 highlightId={highlightId}
+                role={role}
                 onOpenCheckIn={openCheckIn}
                 onOpenCheckOut={openCheckOut}
                 reload={reload}

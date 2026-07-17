@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
 import {
   SectionTitle,
   Field,
@@ -42,6 +43,7 @@ import {
   getIdProofSignedUrl,
   logActivity,
   getSettings,
+  deleteBooking,
 } from "../lib/api.js";
 
 // Smallest "-N" suffix not already used by any existing ref in the group —
@@ -93,13 +95,15 @@ function describeBookingChanges(before, patch, roomOf) {
   return changes;
 }
 
-export default function Bookings({ rooms, guests, bookings, coGuests, maintenanceTickets, highlightId, onOpenCheckIn, onOpenCheckOut, reload }) {
+export default function Bookings({ rooms, guests, bookings, coGuests, maintenanceTickets, highlightId, role, onOpenCheckIn, onOpenCheckOut, reload }) {
   const [modal, setModal] = useState(null);
   const [editModal, setEditModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
   const [confirmSendModal, setConfirmSendModal] = useState(null);
   const [cancelModal, setCancelModal] = useState(null);
   const [changeRoomModal, setChangeRoomModal] = useState(null);
+  const [deleteModal, setDeleteModal] = useState(null); // holds an array of bookings — length 1 for single-delete, N for bulk
+  const [selectedForDelete, setSelectedForDelete] = useState(() => new Set());
   const [filter, setFilter] = useState("all");
   const [dateField, setDateField] = useState("check_in"); // check_in | created_at
   const [dateFrom, setDateFrom] = useState("");
@@ -227,6 +231,89 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       "Booking cancelled",
       `${g ? g.name : "Guest"} — Room${members.length > 1 ? "s" : ""} ${roomNumbers}${reason ? ` (${reason})` : ""}`
     );
+    reload();
+  };
+
+  // Downloads a full record of the booking(s) about to be permanently
+  // deleted — guest, ref, bill no, dates, room, total/paid, and the
+  // complete payment history — since after deletion the DB cascade wipes
+  // all of that with no other durable trace (see deleteCancelledBookings
+  // below). Always called before any delete, never optional.
+  const exportBookingBackup = (bookingList) => {
+    const wb = XLSX.utils.book_new();
+    const summaryRows = bookingList.map((b) => {
+      const g = guestOf(b.guest_id);
+      const r = roomOf(b.room_id);
+      return {
+        Guest: g ? g.name : "Guest removed",
+        Phone: g?.phone || "",
+        "Booking Ref": b.booking_ref || "",
+        "Bill No": b.bill_no || "",
+        Room: r ? r.number : "—",
+        "Check-in": b.check_in,
+        "Check-out": b.check_out,
+        Status: b.status,
+        "Cancel reason": b.cancel_reason || "",
+        Total: b.total,
+        Paid: sumPayments(b),
+      };
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "Bookings");
+
+    const paymentRows = bookingList.flatMap((b) => {
+      const g = guestOf(b.guest_id);
+      return (b.payments || []).map((p) => ({
+        Guest: g ? g.name : "Guest removed",
+        "Booking Ref": b.booking_ref || "",
+        "Bill No": b.bill_no || "",
+        Date: p.paid_on,
+        Mode: p.mode,
+        Amount: p.amount,
+      }));
+    });
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(paymentRows.length ? paymentRows : [{ note: "No payments on this booking" }]),
+      "Payment History"
+    );
+
+    const namePart =
+      bookingList.length === 1
+        ? (guestOf(bookingList[0].guest_id)?.name || "booking").replace(/\s+/g, "_")
+        : `${bookingList.length}_bookings`;
+    XLSX.writeFile(wb, `deleted-booking-backup_${namePart}_${todayISO()}.xlsx`);
+  };
+
+  // Permanent, owner-only cleanup for bookings already cancelled/no-show —
+  // NOT a replacement for Cancel, which is what actually stops a live
+  // booking. The DB cascade (payments/co_guests/booking_services/
+  // inventory_usage all `on delete cascade` on bookings.id) does the
+  // heavy lifting; every finance screen (Finance, Accounts, Reports,
+  // Dashboard) reads bookings fresh from props on every reload rather than
+  // a cached snapshot, so a deleted booking's payment disappears from all
+  // of them automatically once reload() below re-fetches. One Activity
+  // log entry is written per booking, BEFORE the delete call, since
+  // there's no other durable record left afterward (the backup export
+  // above is the other half of that — always generated first).
+  const deleteCancelledBookings = async (bookingList) => {
+    exportBookingBackup(bookingList);
+    const failures = [];
+    for (const b of bookingList) {
+      const g = guestOf(b.guest_id);
+      const r = roomOf(b.room_id);
+      const paid = sumPayments(b);
+      logActivity(
+        "Booking permanently deleted",
+        `${g ? g.name : "Guest"} — Room ${r ? r.number : "—"}${b.bill_no ? ` · Bill No: ${b.bill_no}` : ""} · ${currency(paid)} paid · Permanently deleted by owner`
+      );
+      const { error } = await deleteBooking(b.id);
+      if (error) failures.push(`Room ${r ? r.number : "—"}: ${error.message}`);
+    }
+    if (failures.length) {
+      alert(`Some bookings couldn't be deleted:\n${failures.join("\n")}\n\nThe rest were deleted successfully.`);
+    }
+    setDeleteModal(null);
+    setSelectedForDelete(new Set());
     reload();
   };
 
@@ -465,6 +552,30 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         )}
       </div>
 
+      {/* Bulk delete only offered while looking at exactly the Cancelled/
+          No-show filter — deleting is a permanent cleanup action on
+          bookings that are already terminal, not something to expose
+          while browsing live bookings. */}
+      {role === "owner" && (filter === "cancelled" || filter === "no-show") && selectedForDelete.size > 0 && (
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 10, background: "#fff2ee",
+            border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: "10px 14px", marginBottom: 14,
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{selectedForDelete.size} selected</span>
+          <Button
+            variant="danger"
+            onClick={() => setDeleteModal(bookings.filter((b) => selectedForDelete.has(b.id)))}
+          >
+            Delete selected
+          </Button>
+          <Button variant="ghost" onClick={() => setSelectedForDelete(new Set())}>
+            Clear selection
+          </Button>
+        </div>
+      )}
+
       {visibleGroups.length === 0 ? (
         <EmptyState text="No bookings match this view." />
       ) : (
@@ -472,6 +583,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           const primary = members[0];
           const g = guestOf(primary.guest_id);
           const isMulti = members.length > 1;
+          // Cancelled/no-show members always land in their own 1-member unit
+          // (see computeDisplayGroups in components.jsx), so delete always
+          // targets a single row — no multi-room case to handle here.
+          const isCancelledOrNoShow = primary.status === "cancelled" || primary.status === "no-show";
+          const canBulkSelect = role === "owner" && isCancelledOrNoShow && (filter === "cancelled" || filter === "no-show");
           const combinedTotal = members.reduce((s, m) => s + (m.total || 0), 0);
           const combinedPaid = members.reduce((s, m) => s + sumPayments(m), 0);
           const combinedBalance = combinedTotal - combinedPaid;
@@ -492,6 +608,21 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
                 <span key={m.id} id={`booking-${m.id}`} />
               ))}
               <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                {canBulkSelect && (
+                  <input
+                    type="checkbox"
+                    checked={selectedForDelete.has(primary.id)}
+                    onChange={(e) =>
+                      setSelectedForDelete((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(primary.id);
+                        else next.delete(primary.id);
+                        return next;
+                      })
+                    }
+                    style={{ width: 16, height: 16 }}
+                  />
+                )}
                 <div className="card-col">
                   <div className="title">
                     {g ? g.name : "Guest removed"} {g?.vip && "⭐"}
@@ -590,6 +721,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
                       Cancel booking
                     </Button>
                   )}
+                  {role === "owner" && isCancelledOrNoShow && (
+                    <Button variant="danger" onClick={() => setDeleteModal([primary])}>
+                      Delete
+                    </Button>
+                  )}
                 </div>
               </div>
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--hairline)", display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12.5 }}>
@@ -667,6 +803,15 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
           onConfirm={(payload) => changeRoom(payload)}
         />
       )}
+      {deleteModal && (
+        <ConfirmDeleteBookingsModal
+          bookingList={deleteModal}
+          guests={guests}
+          rooms={rooms}
+          onClose={() => setDeleteModal(null)}
+          onConfirm={() => deleteCancelledBookings(deleteModal)}
+        />
+      )}
     </div>
   );
 }
@@ -713,6 +858,69 @@ function CancelBookingModal({ bookings, guest, rooms, onClose, onConfirm }) {
         </Button>
         <Button variant="danger" onClick={() => onConfirm(reason.trim())}>
           Confirm cancellation
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------
+// PERMANENT DELETE — owner-only cleanup for already-cancelled/no-show
+// bookings. `bookingList` is length 1 for a single-card delete, N for the
+// bulk "Delete selected" action — same modal either way.
+// ---------------------------------------------------------------
+function ConfirmDeleteBookingsModal({ bookingList, guests, rooms, onClose, onConfirm }) {
+  const [checked, setChecked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const isBulk = bookingList.length > 1;
+  const totalPaid = bookingList.reduce((s, b) => s + sumPayments(b), 0);
+
+  return (
+    <Modal title={isBulk ? `Permanently delete ${bookingList.length} bookings` : "Permanently delete booking"} onClose={onClose} width={480}>
+      <div style={{ background: "#fff2ee", border: "1px solid rgba(166,69,47,0.35)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--rust)" }}>This cannot be undone</div>
+        <div style={{ fontSize: 12, color: "var(--ink70)", marginTop: 4 }}>
+          Permanently erases {isBulk ? "these bookings" : "this booking"} and everything linked to {isBulk ? "them" : "it"} —
+          payments, co-guests, service charges, and inventory usage.
+          {totalPaid > 0 && ` ${currency(totalPaid)} in payment history will be permanently erased.`}
+        </div>
+      </div>
+      {isBulk && (
+        <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--hairline)", borderRadius: 8, marginBottom: 14 }}>
+          {bookingList.map((b) => {
+            const g = guests.find((x) => x.id === b.guest_id);
+            const r = rooms.find((x) => x.id === b.room_id);
+            return (
+              <div key={b.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid var(--hairline)", fontSize: 12 }}>
+                <span>{g ? g.name : "Guest removed"} — Room {r ? r.number : "—"}</span>
+                <span style={{ fontFamily: "var(--font-mono)" }}>{currency(sumPayments(b))} paid</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p style={{ fontSize: 12.5, color: "var(--ink45)" }}>
+        A backup Excel file with full booking and payment details downloads automatically before deleting — nothing
+        is lost, it just won't be visible in the app anymore.
+      </p>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+        <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} style={{ marginTop: 2 }} />
+        I understand this permanently deletes {isBulk ? "these bookings" : "this booking"} and cannot be undone.
+      </label>
+      <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          disabled={!checked || busy}
+          onClick={async () => {
+            setBusy(true);
+            await onConfirm();
+            setBusy(false);
+          }}
+        >
+          {busy ? "Deleting…" : "Delete permanently"}
         </Button>
       </div>
     </Modal>
