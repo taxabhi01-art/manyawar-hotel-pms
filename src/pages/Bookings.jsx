@@ -368,10 +368,19 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
       const rate = computeRoomRate(room, occupancy);
       const subtotal = rate * nights;
       const rowDiscount = i === 0 ? Math.max(0, Math.min(subtotal, Number(discount) || 0)) : 0;
-      const total = computeBookingTotal({ subtotal, discount: rowDiscount });
 
       if (row.bookingId) {
         const original = groupBookings.find((b) => b.id === row.bookingId);
+        // Spread the row's existing data first so items_total/services_total/
+        // early_checkin_fee/late_checkout_fee (added later via Inventory or
+        // Billing's "+ Add service", independent of this edit form) are
+        // preserved — computing from a bare {subtotal, discount} object here
+        // silently dropped them from `total` while leaving the underlying
+        // services_total/items_total columns untouched in the DB, producing
+        // a stale total that looked like a false "Excess" once payments
+        // caught up to what services_total already (correctly) included.
+        // Mirrors changeRoom's spread pattern a few lines up.
+        const total = computeBookingTotal({ ...original, subtotal, discount: rowDiscount });
         const patch = {
           room_id: room.id,
           check_in: checkIn,
@@ -407,6 +416,11 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
         const changes = describeBookingChanges(original, patch, roomOf);
         if (changes.length) logLines.push(`Room ${room.number}: ${changes.join(", ")}`);
       } else {
+        // A newly-added row is a brand-new booking — no items/services can
+        // exist for it yet, so there's nothing to preserve (same reasoning
+        // createBooking already relies on for its own bare {subtotal,
+        // discount} computation).
+        const total = computeBookingTotal({ subtotal, discount: 0 });
         const base = primary.booking_ref || bookingRef.trim();
         const ref = base ? `${base}-${nextAvailableSuffix(usedRefs, base)}` : null;
         usedRefs.push(ref);
