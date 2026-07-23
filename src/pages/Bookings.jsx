@@ -38,6 +38,7 @@ import {
   addCoGuest,
   updateCoGuest,
   addPayment,
+  updatePayment,
   updatePaymentAndRecalc,
   uploadIdProof,
   getIdProofSignedUrl,
@@ -352,11 +353,47 @@ export default function Bookings({ rooms, guests, bookings, coGuests, maintenanc
     const removedRows = rows.filter((r) => r.removed && r.bookingId);
     const logLines = [];
 
+    // The group's shared deposit only ever lives on one row (see
+    // createBooking — "Deposit and discount are only ever attached to the
+    // first room's record"). Discount doesn't need special handling here:
+    // it's re-derived fresh from this form's `discount` field and reapplied
+    // to whichever row ends up at position 0 of activeRows in the loop
+    // below, so it already "follows" a removed primary automatically.
+    // Deposit isn't form-derived like that — it's a real payments row tied
+    // to a specific booking_id — so losing the row that holds it would
+    // silently lose the deposit too without this explicit carry-over: move
+    // both the payment row itself (so sumPayments() keeps finding it) and
+    // the deposit/deposit_mode snapshot columns (so cards/PDFs that read
+    // those directly stay correct) to whichever remaining row is the new
+    // de-facto primary.
+    const depositCarryTargetId = activeRows.find((r) => r.bookingId)?.bookingId || null;
+    const depositCarryTarget = depositCarryTargetId ? groupBookings.find((b) => b.id === depositCarryTargetId) : null;
+
     for (const r of removedRows) {
       const original = groupBookings.find((b) => b.id === r.bookingId);
       await updateBooking(original.id, { status: "cancelled", cancel_reason: "Room removed during edit" });
       if (original.status === "checked-in") await updateRoom(original.room_id, { status: "available" });
       logLines.push(`Room ${roomOf(original.room_id)?.number || "—"} removed`);
+
+      if (original.deposit > 0 && depositCarryTarget) {
+        const depositPayment = (original.payments || []).find(
+          (p) => p.amount === original.deposit && p.mode === original.deposit_mode
+        );
+        const targetNewPaid = sumPayments(depositCarryTarget) + original.deposit;
+        await updateBooking(depositCarryTarget.id, {
+          deposit: original.deposit,
+          deposit_mode: original.deposit_mode,
+          paid_amount: targetNewPaid,
+        });
+        if (depositPayment) {
+          await updatePayment(depositPayment.id, { booking_id: depositCarryTarget.id });
+        }
+        // Only the amount that actually moved comes off the removed row —
+        // any OTHER payments it happened to have of its own stay put.
+        const remainingOriginalPaid = Math.max(0, sumPayments(original) - original.deposit);
+        await updateBooking(original.id, { deposit: 0, deposit_mode: null, paid_amount: remainingOriginalPaid });
+        logLines.push(`Deposit ${currency(original.deposit)} carried over to Room ${roomOf(depositCarryTarget.room_id)?.number || "—"}`);
+      }
     }
 
     const usedRefs = groupBookings.map((b) => b.booking_ref);
@@ -1611,7 +1648,13 @@ function EditBookingModal({ groupBookings, allBookings, rooms, maintenanceTicket
           const detail = rowDetails[idx];
           const usedByOthers = new Set(activeRows.filter((r) => r.key !== row.key).map((r) => r.roomId).filter(Boolean));
           const options = availableForDates.filter((r) => r.id === row.roomId || !usedByOthers.has(r.id));
-          const canRemove = row.bookingId !== primary.id; // the primary room anchors the group and can't be removed here
+          // Any active row can be removed, including the primary — as long
+          // as it's not the LAST one (submit() separately blocks saving
+          // with zero active rows). Removing the primary specifically is
+          // safe: saveBookingEditGroup carries its deposit over to the new
+          // de-facto primary, and discount re-derives from this form's
+          // field onto whichever row ends up first regardless.
+          const canRemove = activeRows.length > 1;
           return (
             <div key={row.key} style={{ marginBottom: 10, background: "#fff", border: "1px solid var(--hairline)", borderRadius: 8, padding: 10 }}>
               <div className="grid-2">
